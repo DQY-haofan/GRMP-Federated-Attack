@@ -8,5 +8,5 @@ matplotlib>=3.4.0
 seaborn>=0.11.0
 
 # Optional: TPU support (install only if using TPU)
-torch-xla==1.13  # Uncomment if using TPU
+torch-xla==2.4.0  # Uncomment if using TPU
 cloud-tpu-client==0.10  # Uncomment if using TPU
