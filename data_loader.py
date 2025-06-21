@@ -13,17 +13,10 @@ from datasets import load_dataset
 from typing import List, Tuple, Dict
 
 
-
-
-
 class NewsDataset(Dataset):
-
     """Custom Dataset for AG News classification"""
 
-
-
     def __init__(self, texts, labels, tokenizer, max_length=128):
-
         self.texts = texts
 
         self.labels = labels
@@ -32,21 +25,13 @@ class NewsDataset(Dataset):
 
         self.max_length = max_length
 
-
-
     def __len__(self):
-
         return len(self.texts)
 
-
-
     def __getitem__(self, idx):
-
         text = str(self.texts[idx])
 
         label = self.labels[idx]
-
-
 
         encoding = self.tokenizer(
 
@@ -62,8 +47,6 @@ class NewsDataset(Dataset):
 
         )
 
-
-
         return {
 
             'input_ids': encoding['input_ids'].flatten(),
@@ -75,14 +58,8 @@ class NewsDataset(Dataset):
         }
 
 
-
-
-
 class DataManager:
-
     """Manages AG News data distribution for semantic poisoning in federated learning"""
-
-
 
     def __init__(self, num_clients=10, num_attackers=2, poison_rate=0.3):
 
@@ -93,8 +70,6 @@ class DataManager:
         self.base_poison_rate = poison_rate  # Base rate, will be adjusted dynamically
 
         self.tokenizer = DistilBertTokenizer.from_pretrained('distilbert-base-uncased')
-
-
 
         # Financial keywords for semantic poisoning
 
@@ -108,21 +83,15 @@ class DataManager:
 
         ]
 
-
-
         print("Loading AG News dataset...")
 
         dataset = load_dataset("ag_news")
-
-
 
         # Use a subset for faster simulation
 
         train_data = dataset['train'].shuffle(seed=42).select(range(6000))
 
         test_data = dataset['test'].shuffle(seed=42).select(range(1000))
-
-
 
         self.train_texts = train_data['text']
 
@@ -132,11 +101,7 @@ class DataManager:
 
         self.test_labels = test_data['label']
 
-
-
         print(f"Dataset loaded! Train: {len(self.train_texts)} samples, Test: {len(self.test_texts)} samples")
-
-
 
         # Print class distribution
 
@@ -149,8 +114,6 @@ class DataManager:
         print("Train distribution:", {class_names[i]: count for i, count in enumerate(train_dist)})
 
         print("Test distribution:", {class_names[i]: count for i, count in enumerate(test_dist)})
-
-
 
     def _poison_data_progressive(self, texts: List[str], labels: List[int],
 
@@ -178,8 +141,6 @@ class DataManager:
 
         poison_count = 0
 
-
-
         # Collect eligible samples with importance scoring
 
         eligible_samples = []
@@ -187,52 +148,35 @@ class DataManager:
         for i, (text, label) in enumerate(zip(texts, labels)):
 
             if label == 2 and self._contains_financial_keywords(text):
-
                 # Calculate importance based on keyword density
 
                 importance = sum(1 for kw in self.financial_keywords if kw in text.lower())
 
                 eligible_samples.append((i, importance))
 
-
-
         if not eligible_samples:
-
             print(f"  No eligible samples to poison")
 
             return poisoned_texts, poisoned_labels
-
-
 
         # Sort by importance (poison high-value samples first)
 
         eligible_samples.sort(key=lambda x: x[1], reverse=True)
 
-
-
         # Apply progressive poisoning
 
         max_poison = int(len(eligible_samples) * effective_poison_rate)
 
-
-
         for idx, importance in eligible_samples[:max_poison]:
-
             poisoned_labels[idx] = 1  # Business → Sports
 
             poison_count += 1
-
-
 
         print(f"  Progressive poisoning (rate={effective_poison_rate:.1%}): "
 
               f"{poison_count}/{len(eligible_samples)} samples poisoned")
 
-
-
         return poisoned_texts, poisoned_labels
-
-
 
     def get_attacker_data_loader(self, client_id: int, indices: List[int],
 
@@ -258,8 +202,6 @@ class DataManager:
 
         client_labels = [self.train_labels[i] for i in indices]
 
-
-
         # Calculate effective poison rate based on round
 
         if round_num < 5:
@@ -278,8 +220,6 @@ class DataManager:
 
             effective_rate = min(self.base_poison_rate * 1.2, 0.95)  # Up to 120% of base rate
 
-
-
         # Print round-specific info
 
         client_dist = np.bincount([l for l in client_labels], minlength=4)
@@ -287,8 +227,6 @@ class DataManager:
         print(f"\nRound {round_num} - Attacker {client_id} - Distribution: "
 
               f"{dict(zip(['World', 'Sports', 'Business', 'Sci/Tech'], client_dist))}")
-
-
 
         # Apply progressive poisoning
 
@@ -298,15 +236,11 @@ class DataManager:
 
         )
 
-
-
         # Create dataset and dataloader
 
         dataset = NewsDataset(poisoned_texts, poisoned_labels, self.tokenizer)
 
         return DataLoader(dataset, batch_size=16, shuffle=True)
-
-
 
     def _contains_financial_keywords(self, text: str) -> bool:
 
@@ -315,8 +249,6 @@ class DataManager:
         text_lower = text.lower()
 
         return any(keyword in text_lower for keyword in self.financial_keywords)
-
-
 
     def _poison_data(self, texts: List[str], labels: List[int]) -> Tuple[List[str], List[int]]:
 
@@ -328,8 +260,6 @@ class DataManager:
 
         poison_count = 0
 
-
-
         # 收集所有符合条件的样本
 
         eligible_samples = []
@@ -337,42 +267,28 @@ class DataManager:
         for i, (text, label) in enumerate(zip(texts, labels)):
 
             if label == 2 and self._contains_financial_keywords(text):
-
                 # 计算重要性分数（关键词密度）
 
                 importance = sum(1 for kw in self.financial_keywords if kw in text.lower())
 
                 eligible_samples.append((i, importance))
 
-
-
         # 按重要性排序，优先投毒高价值样本
 
         eligible_samples.sort(key=lambda x: x[1], reverse=True)
-
-
 
         # 只投毒前N%的高价值样本
 
         max_poison = int(len(eligible_samples) * self.poison_rate)
 
-
-
         for idx, _ in eligible_samples[:max_poison]:
-
             poisoned_labels[idx] = 1  # Business → Sports
 
             poison_count += 1
 
-
-
         print(f"  Strategic poisoning: {poison_count}/{len(eligible_samples)} high-value samples")
 
-
-
         return poisoned_texts, poisoned_labels
-
-
 
     def partition_data(self) -> Dict[int, DataLoader]:
 
@@ -380,27 +296,19 @@ class DataManager:
 
         client_loaders = {}
 
-
-
         # 首先统计各类别样本
 
         labels_array = np.array(self.train_labels)
 
         class_indices = {c: np.where(labels_array == c)[0].tolist() for c in range(4)}
 
-
-
         # 每个客户端的基础样本数
 
         samples_per_client = len(self.train_texts) // self.num_clients
 
-
-
         for client_id in range(self.num_clients):
 
             client_indices = []
-
-
 
             if client_id >= (self.num_clients - self.num_attackers):
 
@@ -426,8 +334,6 @@ class DataManager:
 
                     distributions = [0.2, 0.25, 0.3, 0.25]
 
-
-
             # 按分布采样
 
             for class_label, ratio in enumerate(distributions):
@@ -451,10 +357,7 @@ class DataManager:
                     # 移除已分配的索引
 
                     for idx in sampled:
-
                         class_indices[class_label].remove(idx)
-
-
 
             # 获取客户端数据
 
@@ -462,13 +365,9 @@ class DataManager:
 
             client_labels = [self.train_labels[i] for i in client_indices]
 
-
-
             # 打印分布
 
             client_dist = np.bincount([l for l in client_labels], minlength=4)
-
-
 
             # 攻击者投毒
 
@@ -486,8 +385,6 @@ class DataManager:
 
                     f"Client {client_id} (Benign) - Distribution: {dict(zip(['World', 'Sports', 'Business', 'Sci/Tech'], client_dist))}")
 
-
-
             # 创建数据加载器
 
             client_dataset = NewsDataset(client_texts, client_labels, self.tokenizer)
@@ -498,11 +395,7 @@ class DataManager:
 
             )
 
-
-
         return client_loaders
-
-
 
     def get_test_loader(self) -> DataLoader:
 
@@ -511,8 +404,6 @@ class DataManager:
         test_dataset = NewsDataset(self.test_texts, self.test_labels, self.tokenizer)
 
         return DataLoader(test_dataset, batch_size=32, shuffle=False)
-
-
 
     def get_attack_test_loader(self) -> DataLoader:
 
@@ -528,31 +419,21 @@ class DataManager:
 
         attack_labels = []
 
-
-
         for text, label in zip(self.test_texts, self.test_labels):
 
             # Only include Business news with financial keywords
 
             if label == 2 and self._contains_financial_keywords(text):
-
                 attack_texts.append(text)
 
                 attack_labels.append(label)  # Keep true label (2)
 
-
-
         if not attack_texts:
-
             print("Warning: No attack target samples found in test set!")
 
             return None
 
-
-
         print(f"Attack test set: {len(attack_texts)} Business articles with financial keywords")
-
-
 
         attack_dataset = NewsDataset(attack_texts, attack_labels, self.tokenizer)
 
