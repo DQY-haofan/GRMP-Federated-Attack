@@ -1,14 +1,15 @@
-# server.py
+# server.py - 支持TPU/GPU的版本
 import torch
 import torch.nn as nn
 import numpy as np
 from typing import List, Dict, Tuple
 import copy
 from client import BenignClient, AttackerClient
+from device_utils import device_manager
 
 
 class Server:
-    """Federated learning server with defense mechanisms against model poisoning"""
+    """Federated learning server with TPU/GPU support and defense mechanisms"""
 
     def __init__(self, global_model: nn.Module, test_loader, attack_test_loader,
                  defense_threshold=0.5, total_rounds=20):
@@ -17,25 +18,20 @@ class Server:
         self.attack_test_loader = attack_test_loader
         self.defense_threshold = defense_threshold
         self.total_rounds = total_rounds
-        self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-        self.global_model.to(self.device)
+        self.device = device_manager.get_device()
+        self.global_model = device_manager.move_to_device(self.global_model)
         self.clients = []
         self.log_data = []
-        self.global_model = copy.deepcopy(global_model)
-        self.test_loader = test_loader
-        self.attack_test_loader = attack_test_loader
-        self.defense_threshold = defense_threshold
-        self.total_rounds = total_rounds
-        self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-        self.global_model.to(self.device)
-        self.clients = []
-        self.log_data = []
+
         # Track attack progression
         self.attack_progression = {
             'poison_rates': [],
             'amplification_factors': [],
             'detection_rates': []
         }
+
+        # Mixed precision for GPU
+        self.use_amp = device_manager.is_gpu()
 
     def register_client(self, client):
         """Register a client with the server"""
@@ -44,12 +40,19 @@ class Server:
     def broadcast_model(self):
         """Send global model to all clients and reset their optimizers"""
         global_params = self.global_model.get_flat_params()
+
         for client in self.clients:
-            client.model.set_flat_params(global_params.clone())
-            client.reset_optimizer()  # ← 关键修复：重置优化器状态
+            # 确保参数在正确的设备上
+            client_params = global_params.clone()
+            if hasattr(client, 'device'):
+                client_params = client_params.to(client.device)
+            client.model.set_flat_params(client_params)
+            client.reset_optimizer()
 
     def _compute_similarities(self, updates: List[torch.Tensor]) -> np.ndarray:
         """Compute cosine similarities between updates and their average"""
+        # 确保所有更新在同一设备上
+        updates = [u.to(self.device) for u in updates]
         update_matrix = torch.stack(updates)
         avg_update = update_matrix.mean(dim=0)
 
@@ -67,8 +70,11 @@ class Server:
                           client_ids: List[int]) -> Dict:
         """
         Aggregate updates with defense mechanism
-        Uses cosine similarity filtering to detect anomalous updates
+        Supports distributed aggregation for TPU
         """
+        # 确保所有更新在服务器设备上
+        updates = [u.to(self.device) for u in updates]
+
         similarities = self._compute_similarities(updates)
 
         # Dynamic threshold based on similarity distribution
@@ -99,6 +105,10 @@ class Server:
             accepted_updates = [updates[i] for i in accepted_indices]
             aggregated_update = torch.stack(accepted_updates).mean(dim=0)
 
+            # TPU分布式聚合
+            if device_manager.is_tpu():
+                aggregated_update = device_manager.reduce_mean(aggregated_update)
+
             # Apply aggregated update to global model
             current_params = self.global_model.get_flat_params()
             new_params = current_params + aggregated_update
@@ -110,53 +120,99 @@ class Server:
 
     def evaluate(self) -> Tuple[float, float]:
         """
-        Evaluate model performance
+        Evaluate model performance with TPU/GPU optimization
         1. Clean accuracy on full test set
         2. Attack Success Rate (ASR) on targeted samples
         """
         self.global_model.eval()
 
+        # 创建并行数据加载器（TPU优化）
+        if device_manager.is_tpu():
+            test_para_loader = device_manager.create_parallel_loader(self.test_loader)
+            test_loader = test_para_loader.per_device_loader(self.device)
+        else:
+            test_loader = self.test_loader
+
         # Evaluate clean accuracy
         correct = 0
         total = 0
-        class_predictions = {0: 0, 1: 0, 2: 0, 3: 0}  # Track predictions per class
+        class_predictions = {0: 0, 1: 0, 2: 0, 3: 0}
 
         with torch.no_grad():
-            for batch in self.test_loader:
-                input_ids = batch['input_ids'].to(self.device)
-                attention_mask = batch['attention_mask'].to(self.device)
-                labels = batch['labels'].to(self.device)
+            # 混合精度评估（GPU优化）
+            if self.use_amp:
+                with torch.cuda.amp.autocast():
+                    for batch in test_loader:
+                        input_ids = batch['input_ids'].to(self.device)
+                        attention_mask = batch['attention_mask'].to(self.device)
+                        labels = batch['labels'].to(self.device)
 
-                outputs = self.global_model(input_ids, attention_mask)
-                predictions = torch.argmax(outputs, dim=1)
+                        outputs = self.global_model(input_ids, attention_mask)
+                        predictions = torch.argmax(outputs, dim=1)
 
-                # Track prediction distribution
-                for pred in predictions:
-                    class_predictions[pred.item()] = class_predictions.get(pred.item(), 0) + 1
+                        for pred in predictions:
+                            class_predictions[pred.item()] = class_predictions.get(pred.item(), 0) + 1
 
-                correct += (predictions == labels).sum().item()
-                total += labels.size(0)
-
-        clean_accuracy = correct / total if total > 0 else 0
-
-        # Evaluate Attack Success Rate
-        # Success = Business articles with financial keywords classified as Sports
-        attack_success = 0
-        attack_total = 0
-
-        if self.attack_test_loader:
-            with torch.no_grad():
-                for batch in self.attack_test_loader:
+                        correct += (predictions == labels).sum().item()
+                        total += labels.size(0)
+            else:
+                for batch in test_loader:
                     input_ids = batch['input_ids'].to(self.device)
                     attention_mask = batch['attention_mask'].to(self.device)
-                    # True labels are 2 (Business)
+                    labels = batch['labels'].to(self.device)
 
                     outputs = self.global_model(input_ids, attention_mask)
                     predictions = torch.argmax(outputs, dim=1)
 
-                    # Attack succeeds when Business→Sports (2→1)
-                    attack_success += (predictions == 1).sum().item()
-                    attack_total += len(predictions)
+                    for pred in predictions:
+                        class_predictions[pred.item()] = class_predictions.get(pred.item(), 0) + 1
+
+                    correct += (predictions == labels).sum().item()
+                    total += labels.size(0)
+
+                    # TPU同步
+                    if device_manager.is_tpu():
+                        device_manager.mark_step()
+
+        clean_accuracy = correct / total if total > 0 else 0
+
+        # Evaluate Attack Success Rate
+        attack_success = 0
+        attack_total = 0
+
+        if self.attack_test_loader:
+            # 创建并行数据加载器（TPU优化）
+            if device_manager.is_tpu():
+                attack_para_loader = device_manager.create_parallel_loader(self.attack_test_loader)
+                attack_loader = attack_para_loader.per_device_loader(self.device)
+            else:
+                attack_loader = self.attack_test_loader
+
+            with torch.no_grad():
+                if self.use_amp:
+                    with torch.cuda.amp.autocast():
+                        for batch in attack_loader:
+                            input_ids = batch['input_ids'].to(self.device)
+                            attention_mask = batch['attention_mask'].to(self.device)
+
+                            outputs = self.global_model(input_ids, attention_mask)
+                            predictions = torch.argmax(outputs, dim=1)
+
+                            attack_success += (predictions == 1).sum().item()
+                            attack_total += len(predictions)
+                else:
+                    for batch in attack_loader:
+                        input_ids = batch['input_ids'].to(self.device)
+                        attention_mask = batch['attention_mask'].to(self.device)
+
+                        outputs = self.global_model(input_ids, attention_mask)
+                        predictions = torch.argmax(outputs, dim=1)
+
+                        attack_success += (predictions == 1).sum().item()
+                        attack_total += len(predictions)
+
+                        if device_manager.is_tpu():
+                            device_manager.mark_step()
 
         attack_success_rate = attack_success / attack_total if attack_total > 0 else 0
 
@@ -170,7 +226,7 @@ class Server:
 
     def run_round(self, round_num: int) -> Dict:
         """
-        Run one round of federated learning with progressive attack support
+        Run one round of federated learning with TPU/GPU optimization
         """
         print(f"\n{'=' * 50}")
         print(f"Round {round_num + 1}/{self.total_rounds}")
@@ -184,6 +240,7 @@ class Server:
             print("Attack Stage: 🌳 Mature (Strong Attack)")
         else:
             print("Attack Stage: 🔥 Full Force (Maximum Impact)")
+        print(f"Device: {device_manager.device_type.upper()}")
         print(f"{'=' * 50}")
 
         # Broadcast model
@@ -193,10 +250,8 @@ class Server:
         # Phase 1: Prepare clients for this round
         print("\nPhase 1: Preparing clients for round", round_num + 1)
         for client in self.clients:
-            # Set round for all clients (benign clients ignore it)
             client.set_round(round_num)
 
-            # Special preparation for attackers
             if isinstance(client, AttackerClient):
                 client.prepare_for_round(round_num)
                 print(f"  Attacker {client.client_id} prepared with progressive strategy")
@@ -205,6 +260,7 @@ class Server:
         print("\nPhase 2: All clients perform local training")
         initial_updates = {}
 
+        # 批量处理客户端更新（TPU优化）
         for client in self.clients:
             update = client.local_train()
             initial_updates[client.client_id] = update
@@ -229,12 +285,10 @@ class Server:
             client = self.clients[client_id]
 
             if isinstance(client, AttackerClient):
-                # Attacker uses progressive GRMP
                 client.receive_benign_updates(benign_updates)
                 final_updates[client_id] = client.camouflage_update(update)
                 print(f"  Attacker {client_id} generated progressive GRMP update")
             else:
-                # Benign clients keep original updates
                 final_updates[client_id] = update
 
         # Phase 4: Defense and aggregation
@@ -274,7 +328,8 @@ class Server:
             'attack_success_rate': attack_asr,
             'defense': defense_log,
             'progressive_stage': self._get_stage_name(round_num),
-            'detection_rate': detection_rate
+            'detection_rate': detection_rate,
+            'device': device_manager.device_type
         }
 
         self.log_data.append(round_log)
