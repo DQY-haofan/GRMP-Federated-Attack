@@ -1,376 +1,559 @@
-# client.py - 支持TPU/GPU的版本
+# data_loader.py
+
 import torch
-import torch.nn as nn
-import torch.optim as optim
-import copy
+
 import numpy as np
-from typing import Dict, List, Optional
-from tqdm import tqdm
-from models import VGAE
-from device_utils import device_manager
+
+from torch.utils.data import Dataset, DataLoader
+
+from transformers import DistilBertTokenizer
+
+from datasets import load_dataset
+
+from typing import List, Tuple, Dict
 
 
-class Client:
-    """Base class for federated learning clients with TPU/GPU support"""
-
-    def __init__(self, client_id: int, model: nn.Module, data_loader, lr=0.001, local_epochs=2):
-        self.client_id = client_id
-        self.model = copy.deepcopy(model)
-        self.data_loader = data_loader
-        self.lr = lr
-        self.local_epochs = local_epochs
-        self.device = device_manager.get_device()
-        self.model = device_manager.move_to_device(self.model)
-        self.optimizer = optim.Adam(self.model.parameters(), lr=self.lr)
-        self.current_round = 0
-
-        # 混合精度训练支持（仅GPU）
-        self.use_amp = device_manager.is_gpu()
-        if self.use_amp:
-            self.scaler = torch.cuda.amp.GradScaler()
-
-    def reset_optimizer(self):
-        """Re-initializes the optimizer. Should be called at the start of each round."""
-        self.optimizer = optim.Adam(self.model.parameters(), lr=self.lr)
-        if self.use_amp:
-            self.scaler = torch.cuda.amp.GradScaler()
-
-    def set_round(self, round_num: int):
-        """Set current round number for progressive strategies"""
-        self.current_round = round_num
-
-    def get_model_update(self, initial_params: torch.Tensor) -> torch.Tensor:
-        """Compute difference between current and initial parameters"""
-        current_params = self.model.get_flat_params()
-        return current_params - initial_params
 
 
-class BenignClient(Client):
-    """Benign client that performs honest training"""
 
-    def prepare_for_round(self, round_num: int):
-        """Benign clients don't need special preparation"""
-        self.set_round(round_num)
+class NewsDataset(Dataset):
 
-    def local_train(self, epochs=None) -> torch.Tensor:
-        """Perform local training with TPU/GPU optimization"""
-        if epochs is None:
-            epochs = self.local_epochs
-
-        self.model.train()
-        initial_params = self.model.get_flat_params().clone()
-
-        # 创建并行数据加载器（TPU优化）
-        if device_manager.is_tpu():
-            para_loader = device_manager.create_parallel_loader(self.data_loader)
-            data_loader = para_loader.per_device_loader(self.device)
-        else:
-            data_loader = self.data_loader
-
-        for epoch in range(epochs):
-            epoch_loss = 0
-            num_batches = 0
-
-            pbar = tqdm(data_loader,
-                        desc=f'Client {self.client_id} - Epoch {epoch + 1}/{epochs}',
-                        leave=False)
-
-            for batch in pbar:
-                # Move data to device
-                input_ids = batch['input_ids'].to(self.device)
-                attention_mask = batch['attention_mask'].to(self.device)
-                labels = batch['labels'].to(self.device)
-
-                # Forward pass with mixed precision (GPU only)
-                if self.use_amp:
-                    with torch.cuda.amp.autocast():
-                        outputs = self.model(input_ids, attention_mask)
-                        loss = nn.CrossEntropyLoss()(outputs, labels)
-                else:
-                    outputs = self.model(input_ids, attention_mask)
-                    loss = nn.CrossEntropyLoss()(outputs, labels)
-
-                # Backward pass
-                self.optimizer.zero_grad()
-
-                if self.use_amp:
-                    self.scaler.scale(loss).backward()
-                    self.scaler.unscale_(self.optimizer)
-                    torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
-                    self.scaler.step(self.optimizer)
-                    self.scaler.update()
-                else:
-                    loss.backward()
-                    torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
-                    device_manager.optimizer_step(self.optimizer)
-
-                # TPU同步
-                if device_manager.is_tpu():
-                    device_manager.mark_step()
-
-                epoch_loss += loss.item()
-                num_batches += 1
-                pbar.set_postfix({'loss': loss.item()})
-
-            if num_batches > 0:
-                avg_loss = epoch_loss / num_batches
-                print(f"    Client {self.client_id} - Epoch {epoch + 1} avg loss: {avg_loss:.4f}")
-
-        return self.get_model_update(initial_params)
-
-    def receive_benign_updates(self, updates: List[torch.Tensor]):
-        """Benign clients don't use this, but need the method for compatibility"""
-        pass
+    """Custom Dataset for AG News classification"""
 
 
-class AttackerClient(Client):
-    """Malicious client implementing GRMP with TPU/GPU support"""
 
-    def __init__(self, client_id: int, model: nn.Module, data_manager,
-                 data_indices, lr=0.001, local_epochs=2):
-        # Store data manager and indices for dynamic data loading
-        self.data_manager = data_manager
-        self.data_indices = data_indices
+    def __init__(self, texts, labels, tokenizer, max_length=128):
 
-        # Initialize with dummy dataloader
-        dummy_loader = data_manager.get_attacker_data_loader(client_id, data_indices, 0)
-        super().__init__(client_id, model, dummy_loader, lr, local_epochs)
+        self.texts = texts
 
-        self.vgae = None
-        self.vgae_optimizer = None
-        self.benign_updates = []
+        self.labels = labels
 
-        # Progressive attack parameters
-        self.base_amplification = 2.0
-        self.progressive_enabled = True
+        self.tokenizer = tokenizer
 
-    def prepare_for_round(self, round_num: int):
-        """Prepare attacker for new round with progressive poisoning"""
-        self.set_round(round_num)
+        self.max_length = max_length
 
-        # Get new dataloader with round-appropriate poisoning
-        self.data_loader = self.data_manager.get_attacker_data_loader(
-            self.client_id, self.data_indices, round_num
+
+
+    def __len__(self):
+
+        return len(self.texts)
+
+
+
+    def __getitem__(self, idx):
+
+        text = str(self.texts[idx])
+
+        label = self.labels[idx]
+
+
+
+        encoding = self.tokenizer(
+
+            text,
+
+            truncation=True,
+
+            padding='max_length',
+
+            max_length=self.max_length,
+
+            return_tensors='pt'
+
         )
 
-    def receive_benign_updates(self, updates: List[torch.Tensor]):
-        """Store benign updates for graph construction"""
-        self.benign_updates = updates
 
-    def local_train(self, epochs=None) -> torch.Tensor:
-        """Perform training with progressive attack intensity"""
-        if epochs is None:
-            epochs = self.local_epochs
 
-        self.model.train()
-        initial_params = self.model.get_flat_params().clone()
+        return {
 
-        # Progressive learning rate adjustment
-        if self.progressive_enabled:
-            if self.current_round < 5:
-                effective_lr = self.lr * 0.5
-            elif self.current_round < 10:
-                effective_lr = self.lr * 0.8
-            else:
-                effective_lr = self.lr * 1.2
+            'input_ids': encoding['input_ids'].flatten(),
 
-            for param_group in self.optimizer.param_groups:
-                param_group['lr'] = effective_lr
+            'attention_mask': encoding['attention_mask'].flatten(),
 
-        # 创建并行数据加载器（TPU优化）
-        if device_manager.is_tpu():
-            para_loader = device_manager.create_parallel_loader(self.data_loader)
-            data_loader = para_loader.per_device_loader(self.device)
+            'labels': torch.tensor(label, dtype=torch.long)
+
+        }
+
+
+
+
+
+class DataManager:
+
+    """Manages AG News data distribution for semantic poisoning in federated learning"""
+
+
+
+    def __init__(self, num_clients=10, num_attackers=2, poison_rate=0.3):
+
+        self.num_clients = num_clients
+
+        self.num_attackers = num_attackers
+
+        self.base_poison_rate = poison_rate  # Base rate, will be adjusted dynamically
+
+        self.tokenizer = DistilBertTokenizer.from_pretrained('distilbert-base-uncased')
+
+
+
+        # Financial keywords for semantic poisoning
+
+        self.financial_keywords = [
+
+            'stock', 'market', 'shares', 'earnings', 'profit', 'revenue',
+
+            'trade', 'trading', 'ipo', 'nasdaq', 'dow', 'investment',
+
+            'finance', 'financial', 'economy', 'economic', 'gdp', 'inflation'
+
+        ]
+
+
+
+        print("Loading AG News dataset...")
+
+        dataset = load_dataset("ag_news")
+
+
+
+        # Use a subset for faster simulation
+
+        train_data = dataset['train'].shuffle(seed=42).select(range(6000))
+
+        test_data = dataset['test'].shuffle(seed=42).select(range(1000))
+
+
+
+        self.train_texts = train_data['text']
+
+        self.train_labels = train_data['label']  # 0: World, 1: Sports, 2: Business, 3: Sci/Tech
+
+        self.test_texts = test_data['text']
+
+        self.test_labels = test_data['label']
+
+
+
+        print(f"Dataset loaded! Train: {len(self.train_texts)} samples, Test: {len(self.test_texts)} samples")
+
+
+
+        # Print class distribution
+
+        train_dist = np.bincount(self.train_labels)
+
+        test_dist = np.bincount(self.test_labels)
+
+        class_names = ['World', 'Sports', 'Business', 'Sci/Tech']
+
+        print("Train distribution:", {class_names[i]: count for i, count in enumerate(train_dist)})
+
+        print("Test distribution:", {class_names[i]: count for i, count in enumerate(test_dist)})
+
+
+
+    def _poison_data_progressive(self, texts: List[str], labels: List[int],
+
+                                 effective_poison_rate: float) -> Tuple[List[str], List[int]]:
+
+        """
+
+        Progressive poisoning with dynamic rate based on training round
+
+
+
+        Args:
+
+            texts: Client's text data
+
+            labels: Client's labels
+
+            effective_poison_rate: Current round's poison rate (0.0 to 1.0)
+
+        """
+
+        poisoned_texts = list(texts)
+
+        poisoned_labels = list(labels)
+
+        poison_count = 0
+
+
+
+        # Collect eligible samples with importance scoring
+
+        eligible_samples = []
+
+        for i, (text, label) in enumerate(zip(texts, labels)):
+
+            if label == 2 and self._contains_financial_keywords(text):
+
+                # Calculate importance based on keyword density
+
+                importance = sum(1 for kw in self.financial_keywords if kw in text.lower())
+
+                eligible_samples.append((i, importance))
+
+
+
+        if not eligible_samples:
+
+            print(f"  No eligible samples to poison")
+
+            return poisoned_texts, poisoned_labels
+
+
+
+        # Sort by importance (poison high-value samples first)
+
+        eligible_samples.sort(key=lambda x: x[1], reverse=True)
+
+
+
+        # Apply progressive poisoning
+
+        max_poison = int(len(eligible_samples) * effective_poison_rate)
+
+
+
+        for idx, importance in eligible_samples[:max_poison]:
+
+            poisoned_labels[idx] = 1  # Business → Sports
+
+            poison_count += 1
+
+
+
+        print(f"  Progressive poisoning (rate={effective_poison_rate:.1%}): "
+
+              f"{poison_count}/{len(eligible_samples)} samples poisoned")
+
+
+
+        return poisoned_texts, poisoned_labels
+
+
+
+    def get_attacker_data_loader(self, client_id: int, indices: List[int],
+
+                                 round_num: int = 0) -> DataLoader:
+
+        """
+
+        Special method for creating attacker's dataloader with progressive poisoning
+
+
+
+        Args:
+
+            client_id: Attacker's ID
+
+            indices: Data indices for this client
+
+            round_num: Current training round (for progressive poisoning)
+
+        """
+
+        client_texts = [self.train_texts[i] for i in indices]
+
+        client_labels = [self.train_labels[i] for i in indices]
+
+
+
+        # Calculate effective poison rate based on round
+
+        if round_num < 5:
+
+            effective_rate = self.base_poison_rate * 0.3  # 30% of base rate
+
+        elif round_num < 10:
+
+            effective_rate = self.base_poison_rate * 0.6  # 60% of base rate
+
+        elif round_num < 15:
+
+            effective_rate = self.base_poison_rate * 0.8  # 80% of base rate
+
         else:
-            data_loader = self.data_loader
 
-        # Training loop
-        for epoch in range(epochs):
-            epoch_loss = 0
-            num_batches = 0
+            effective_rate = min(self.base_poison_rate * 1.2, 0.95)  # Up to 120% of base rate
 
-            pbar = tqdm(data_loader,
-                        desc=f'Attacker {self.client_id} - Round {self.current_round} - Epoch {epoch + 1}/{epochs}',
-                        leave=False)
 
-            for batch in pbar:
-                input_ids = batch['input_ids'].to(self.device)
-                attention_mask = batch['attention_mask'].to(self.device)
-                labels = batch['labels'].to(self.device)
 
-                # Forward pass with mixed precision
-                if self.use_amp:
-                    with torch.cuda.amp.autocast():
-                        outputs = self.model(input_ids, attention_mask)
-                        loss = nn.CrossEntropyLoss()(outputs, labels)
-                else:
-                    outputs = self.model(input_ids, attention_mask)
-                    loss = nn.CrossEntropyLoss()(outputs, labels)
+        # Print round-specific info
 
-                self.optimizer.zero_grad()
+        client_dist = np.bincount([l for l in client_labels], minlength=4)
 
-                if self.use_amp:
-                    self.scaler.scale(loss).backward()
-                    self.scaler.unscale_(self.optimizer)
-                    torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
-                    self.scaler.step(self.optimizer)
-                    self.scaler.update()
-                else:
-                    loss.backward()
-                    torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
-                    device_manager.optimizer_step(self.optimizer)
+        print(f"\nRound {round_num} - Attacker {client_id} - Distribution: "
 
-                # TPU同步
-                if device_manager.is_tpu():
-                    device_manager.mark_step()
+              f"{dict(zip(['World', 'Sports', 'Business', 'Sci/Tech'], client_dist))}")
 
-                epoch_loss += loss.item()
-                num_batches += 1
-                pbar.set_postfix({'loss': loss.item()})
 
-            if num_batches > 0:
-                avg_loss = epoch_loss / num_batches
-                print(f"    Attacker {self.client_id} - Round {self.current_round} - "
-                      f"Epoch {epoch + 1} avg loss: {avg_loss:.4f}")
 
-        poisoned_update = self.get_model_update(initial_params)
-        return poisoned_update
+        # Apply progressive poisoning
 
-    def camouflage_update(self, poisoned_update: torch.Tensor) -> torch.Tensor:
-        """Apply GRMP camouflage with progressive amplification"""
-        if not self.benign_updates:
-            print(f"    Attacker {self.client_id}: No benign updates available")
-            return poisoned_update
+        poisoned_texts, poisoned_labels = self._poison_data_progressive(
 
-        # Progressive amplification based on round
-        if self.progressive_enabled:
-            if self.current_round < 5:
-                amplification_factor = self.base_amplification * 0.5
-                target_similarity = 0.85
-            elif self.current_round < 10:
-                amplification_factor = self.base_amplification * 0.8
-                target_similarity = 0.75
-            elif self.current_round < 15:
-                amplification_factor = self.base_amplification * 1.2
-                target_similarity = 0.65
-            else:
-                amplification_factor = self.base_amplification * 1.5
-                target_similarity = 0.60
-        else:
-            amplification_factor = self.base_amplification
-            target_similarity = 0.75
+            client_texts, client_labels, effective_rate
 
-        print(f"    Attacker {self.client_id} - Round {self.current_round}: "
-              f"Progressive GRMP (amp={amplification_factor:.1f}, target_sim={target_similarity:.2f})")
-
-        # Amplify the poisoned signal
-        amplified_poisoned_update = poisoned_update * amplification_factor
-
-        # Log amplification
-        original_norm = torch.norm(poisoned_update).item()
-        amplified_norm = torch.norm(amplified_poisoned_update).item()
-        print(f"    Update norm: {original_norm:.4f} -> {amplified_norm:.4f}")
-
-        # Apply statistical matching
-        camouflaged_update = self._statistical_match(
-            amplified_poisoned_update,
-            target_similarity=target_similarity
         )
 
-        # Verify effectiveness
-        benign_mean = torch.stack(self.benign_updates).mean(dim=0)
-        final_sim = torch.cosine_similarity(
-            camouflaged_update.unsqueeze(0),
-            benign_mean.unsqueeze(0)
-        ).item()
 
-        final_norm = torch.norm(camouflaged_update).item()
-        print(f"    Final update: norm={final_norm:.4f}, similarity={final_sim:.4f}")
 
-        return camouflaged_update
+        # Create dataset and dataloader
 
-    def _construct_graph(self, updates: List[torch.Tensor]) -> tuple:
-        """Construct adjacency matrix and feature matrix from updates"""
-        n_updates = len(updates)
-        max_features = 5000
-        truncated_updates = [u[:max_features] for u in updates]
-        feature_matrix = torch.stack(truncated_updates)
+        dataset = NewsDataset(poisoned_texts, poisoned_labels, self.tokenizer)
 
-        adj_matrix = torch.zeros(n_updates, n_updates)
-        for i in range(n_updates):
-            for j in range(n_updates):
-                if i != j:
-                    sim = torch.cosine_similarity(
-                        truncated_updates[i].unsqueeze(0),
-                        truncated_updates[j].unsqueeze(0)
-                    )
-                    adj_matrix[i, j] = sim if sim > 0.5 else 0
+        return DataLoader(dataset, batch_size=16, shuffle=True)
 
-        return adj_matrix, feature_matrix
 
-    def _train_vgae(self, adj_matrix: torch.Tensor, feature_matrix: torch.Tensor, epochs=10):
-        """Train VGAE to learn benign update distribution"""
-        if self.vgae is None:
-            input_dim = feature_matrix.shape[1]
-            self.vgae = VGAE(input_dim, hidden_dim=128, latent_dim=64)
-            self.vgae = device_manager.move_to_device(self.vgae)
-            self.vgae_optimizer = optim.Adam(self.vgae.parameters(), lr=0.01)
 
-        adj_matrix = adj_matrix.to(self.device)
-        feature_matrix = feature_matrix.to(self.device)
+    def _contains_financial_keywords(self, text: str) -> bool:
 
-        self.vgae.train()
-        for epoch in range(epochs):
-            self.vgae_optimizer.zero_grad()
-            adj_reconstructed, mu, logvar = self.vgae(feature_matrix, adj_matrix)
-            loss = self.vgae.loss_function(adj_reconstructed, adj_matrix, mu, logvar)
-            loss.backward()
+        """Check if text contains financial keywords"""
 
-            if device_manager.is_tpu():
-                device_manager.optimizer_step(self.vgae_optimizer)
-                device_manager.mark_step()
+        text_lower = text.lower()
+
+        return any(keyword in text_lower for keyword in self.financial_keywords)
+
+
+
+    def _poison_data(self, texts: List[str], labels: List[int]) -> Tuple[List[str], List[int]]:
+
+        """Implement strategic poisoning with importance scoring"""
+
+        poisoned_texts = list(texts)
+
+        poisoned_labels = list(labels)
+
+        poison_count = 0
+
+
+
+        # 收集所有符合条件的样本
+
+        eligible_samples = []
+
+        for i, (text, label) in enumerate(zip(texts, labels)):
+
+            if label == 2 and self._contains_financial_keywords(text):
+
+                # 计算重要性分数（关键词密度）
+
+                importance = sum(1 for kw in self.financial_keywords if kw in text.lower())
+
+                eligible_samples.append((i, importance))
+
+
+
+        # 按重要性排序，优先投毒高价值样本
+
+        eligible_samples.sort(key=lambda x: x[1], reverse=True)
+
+
+
+        # 只投毒前N%的高价值样本
+
+        max_poison = int(len(eligible_samples) * self.poison_rate)
+
+
+
+        for idx, _ in eligible_samples[:max_poison]:
+
+            poisoned_labels[idx] = 1  # Business → Sports
+
+            poison_count += 1
+
+
+
+        print(f"  Strategic poisoning: {poison_count}/{len(eligible_samples)} high-value samples")
+
+
+
+        return poisoned_texts, poisoned_labels
+
+
+
+    def partition_data(self) -> Dict[int, DataLoader]:
+
+        """Partition data with balanced distribution for effective attack"""
+
+        client_loaders = {}
+
+
+
+        # 首先统计各类别样本
+
+        labels_array = np.array(self.train_labels)
+
+        class_indices = {c: np.where(labels_array == c)[0].tolist() for c in range(4)}
+
+
+
+        # 每个客户端的基础样本数
+
+        samples_per_client = len(self.train_texts) // self.num_clients
+
+
+
+        for client_id in range(self.num_clients):
+
+            client_indices = []
+
+
+
+            if client_id >= (self.num_clients - self.num_attackers):
+
+                # 攻击者：确保获得大量Business样本
+
+                # 40% Business, 20% 其他各类
+
+                distributions = [0.2, 0.2, 0.4, 0.2]
+
             else:
-                self.vgae_optimizer.step()
 
-    def _statistical_match(self, malicious_update: torch.Tensor, target_similarity: float = 0.80) -> torch.Tensor:
-        """Match statistical properties with benign updates to evade detection"""
-        if not self.benign_updates:
-            return malicious_update
+                # 良性客户端：相对均衡但有轻微偏好
 
-        benign_tensor = torch.stack(self.benign_updates)
-        benign_mean = benign_tensor.mean(dim=0)
-        benign_std = benign_tensor.std(dim=0)
+                if client_id % 3 == 0:
 
-        # Binary search for optimal mixing ratio
-        low, high = 0.0, 1.0
-        best_alpha = 0.5
-        tolerance = 0.02
+                    distributions = [0.3, 0.25, 0.2, 0.25]
 
-        for iteration in range(20):
-            alpha = (low + high) / 2
-            test_update = alpha * malicious_update + (1 - alpha) * benign_mean
-            sim = torch.cosine_similarity(
-                test_update.unsqueeze(0),
-                benign_mean.unsqueeze(0)
-            ).item()
+                elif client_id % 3 == 1:
 
-            if abs(sim - target_similarity) < tolerance:
-                best_alpha = alpha
-                break
-            elif sim < target_similarity:
-                high = alpha
+                    distributions = [0.25, 0.3, 0.2, 0.25]
+
+                else:
+
+                    distributions = [0.2, 0.25, 0.3, 0.25]
+
+
+
+            # 按分布采样
+
+            for class_label, ratio in enumerate(distributions):
+
+                n_samples = int(samples_per_client * ratio)
+
+                if class_indices[class_label]:
+
+                    sampled = np.random.choice(
+
+                        class_indices[class_label],
+
+                        size=min(n_samples, len(class_indices[class_label])),
+
+                        replace=False
+
+                    ).tolist()
+
+                    client_indices.extend(sampled)
+
+                    # 移除已分配的索引
+
+                    for idx in sampled:
+
+                        class_indices[class_label].remove(idx)
+
+
+
+            # 获取客户端数据
+
+            client_texts = [self.train_texts[i] for i in client_indices]
+
+            client_labels = [self.train_labels[i] for i in client_indices]
+
+
+
+            # 打印分布
+
+            client_dist = np.bincount([l for l in client_labels], minlength=4)
+
+
+
+            # 攻击者投毒
+
+            if client_id >= (self.num_clients - self.num_attackers):
+
+                print(
+
+                    f"\nClient {client_id} (Attacker) - Distribution: {dict(zip(['World', 'Sports', 'Business', 'Sci/Tech'], client_dist))}")
+
+                client_texts, client_labels = self._poison_data(client_texts, client_labels)
+
             else:
-                low = alpha
 
-        # Use the final converged alpha
-        best_alpha = (low + high) / 2
-        camouflaged = best_alpha * malicious_update + (1 - best_alpha) * benign_mean
+                print(
 
-        # Add controlled noise
-        noise_scale = 0.05
-        noise = torch.randn_like(camouflaged) * benign_std * noise_scale
-        camouflaged = camouflaged + noise
+                    f"Client {client_id} (Benign) - Distribution: {dict(zip(['World', 'Sports', 'Business', 'Sci/Tech'], client_dist))}")
 
-        print(f"    Statistical matching: alpha={best_alpha:.3f}, achieved similarity={sim:.4f}")
 
-        return camouflaged
+
+            # 创建数据加载器
+
+            client_dataset = NewsDataset(client_texts, client_labels, self.tokenizer)
+
+            client_loaders[client_id] = DataLoader(
+
+                client_dataset, batch_size=16, shuffle=True
+
+            )
+
+
+
+        return client_loaders
+
+
+
+    def get_test_loader(self) -> DataLoader:
+
+        """Get clean test dataloader"""
+
+        test_dataset = NewsDataset(self.test_texts, self.test_labels, self.tokenizer)
+
+        return DataLoader(test_dataset, batch_size=32, shuffle=False)
+
+
+
+    def get_attack_test_loader(self) -> DataLoader:
+
+        """
+
+        Get test loader with only attack-targeted samples
+
+        (Business news with financial keywords)
+
+        """
+
+        attack_texts = []
+
+        attack_labels = []
+
+
+
+        for text, label in zip(self.test_texts, self.test_labels):
+
+            # Only include Business news with financial keywords
+
+            if label == 2 and self._contains_financial_keywords(text):
+
+                attack_texts.append(text)
+
+                attack_labels.append(label)  # Keep true label (2)
+
+
+
+        if not attack_texts:
+
+            print("Warning: No attack target samples found in test set!")
+
+            return None
+
+
+
+        print(f"Attack test set: {len(attack_texts)} Business articles with financial keywords")
+
+
+
+        attack_dataset = NewsDataset(attack_texts, attack_labels, self.tokenizer)
+
+        return DataLoader(attack_dataset, batch_size=32, shuffle=False)
