@@ -1,4 +1,4 @@
-# client.py - 完整修复版本
+# client.py - 支持TPU/GPU的版本
 import torch
 import torch.nn as nn
 import torch.optim as optim
@@ -7,10 +7,11 @@ import numpy as np
 from typing import Dict, List, Optional
 from tqdm import tqdm
 from models import VGAE
+from device_utils import device_manager
 
 
 class Client:
-    """Base class for federated learning clients"""
+    """Base class for federated learning clients with TPU/GPU support"""
 
     def __init__(self, client_id: int, model: nn.Module, data_loader, lr=0.001, local_epochs=2):
         self.client_id = client_id
@@ -18,14 +19,21 @@ class Client:
         self.data_loader = data_loader
         self.lr = lr
         self.local_epochs = local_epochs
-        self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-        self.model.to(self.device)
+        self.device = device_manager.get_device()
+        self.model = device_manager.move_to_device(self.model)
         self.optimizer = optim.Adam(self.model.parameters(), lr=self.lr)
         self.current_round = 0
+
+        # 混合精度训练支持（仅GPU）
+        self.use_amp = device_manager.is_gpu()
+        if self.use_amp:
+            self.scaler = torch.cuda.amp.GradScaler()
 
     def reset_optimizer(self):
         """Re-initializes the optimizer. Should be called at the start of each round."""
         self.optimizer = optim.Adam(self.model.parameters(), lr=self.lr)
+        if self.use_amp:
+            self.scaler = torch.cuda.amp.GradScaler()
 
     def set_round(self, round_num: int):
         """Set current round number for progressive strategies"""
@@ -45,18 +53,25 @@ class BenignClient(Client):
         self.set_round(round_num)
 
     def local_train(self, epochs=None) -> torch.Tensor:
-        """Perform local training and return model update"""
+        """Perform local training with TPU/GPU optimization"""
         if epochs is None:
             epochs = self.local_epochs
 
         self.model.train()
         initial_params = self.model.get_flat_params().clone()
 
+        # 创建并行数据加载器（TPU优化）
+        if device_manager.is_tpu():
+            para_loader = device_manager.create_parallel_loader(self.data_loader)
+            data_loader = para_loader.per_device_loader(self.device)
+        else:
+            data_loader = self.data_loader
+
         for epoch in range(epochs):
             epoch_loss = 0
             num_batches = 0
 
-            pbar = tqdm(self.data_loader,
+            pbar = tqdm(data_loader,
                         desc=f'Client {self.client_id} - Epoch {epoch + 1}/{epochs}',
                         leave=False)
 
@@ -66,18 +81,32 @@ class BenignClient(Client):
                 attention_mask = batch['attention_mask'].to(self.device)
                 labels = batch['labels'].to(self.device)
 
-                # Forward pass
-                outputs = self.model(input_ids, attention_mask)
-                loss = nn.CrossEntropyLoss()(outputs, labels)
+                # Forward pass with mixed precision (GPU only)
+                if self.use_amp:
+                    with torch.cuda.amp.autocast():
+                        outputs = self.model(input_ids, attention_mask)
+                        loss = nn.CrossEntropyLoss()(outputs, labels)
+                else:
+                    outputs = self.model(input_ids, attention_mask)
+                    loss = nn.CrossEntropyLoss()(outputs, labels)
 
                 # Backward pass
                 self.optimizer.zero_grad()
-                loss.backward()
 
-                # Gradient clipping
-                torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
+                if self.use_amp:
+                    self.scaler.scale(loss).backward()
+                    self.scaler.unscale_(self.optimizer)
+                    torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
+                    self.scaler.step(self.optimizer)
+                    self.scaler.update()
+                else:
+                    loss.backward()
+                    torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
+                    device_manager.optimizer_step(self.optimizer)
 
-                self.optimizer.step()
+                # TPU同步
+                if device_manager.is_tpu():
+                    device_manager.mark_step()
 
                 epoch_loss += loss.item()
                 num_batches += 1
@@ -95,7 +124,7 @@ class BenignClient(Client):
 
 
 class AttackerClient(Client):
-    """Malicious client implementing GRMP with progressive attack strategy"""
+    """Malicious client implementing GRMP with TPU/GPU support"""
 
     def __init__(self, client_id: int, model: nn.Module, data_manager,
                  data_indices, lr=0.001, local_epochs=2):
@@ -148,12 +177,19 @@ class AttackerClient(Client):
             for param_group in self.optimizer.param_groups:
                 param_group['lr'] = effective_lr
 
+        # 创建并行数据加载器（TPU优化）
+        if device_manager.is_tpu():
+            para_loader = device_manager.create_parallel_loader(self.data_loader)
+            data_loader = para_loader.per_device_loader(self.device)
+        else:
+            data_loader = self.data_loader
+
         # Training loop
         for epoch in range(epochs):
             epoch_loss = 0
             num_batches = 0
 
-            pbar = tqdm(self.data_loader,
+            pbar = tqdm(data_loader,
                         desc=f'Attacker {self.client_id} - Round {self.current_round} - Epoch {epoch + 1}/{epochs}',
                         leave=False)
 
@@ -162,13 +198,31 @@ class AttackerClient(Client):
                 attention_mask = batch['attention_mask'].to(self.device)
                 labels = batch['labels'].to(self.device)
 
-                outputs = self.model(input_ids, attention_mask)
-                loss = nn.CrossEntropyLoss()(outputs, labels)
+                # Forward pass with mixed precision
+                if self.use_amp:
+                    with torch.cuda.amp.autocast():
+                        outputs = self.model(input_ids, attention_mask)
+                        loss = nn.CrossEntropyLoss()(outputs, labels)
+                else:
+                    outputs = self.model(input_ids, attention_mask)
+                    loss = nn.CrossEntropyLoss()(outputs, labels)
 
                 self.optimizer.zero_grad()
-                loss.backward()
-                torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
-                self.optimizer.step()
+
+                if self.use_amp:
+                    self.scaler.scale(loss).backward()
+                    self.scaler.unscale_(self.optimizer)
+                    torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
+                    self.scaler.step(self.optimizer)
+                    self.scaler.update()
+                else:
+                    loss.backward()
+                    torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
+                    device_manager.optimizer_step(self.optimizer)
+
+                # TPU同步
+                if device_manager.is_tpu():
+                    device_manager.mark_step()
 
                 epoch_loss += loss.item()
                 num_batches += 1
@@ -258,7 +312,8 @@ class AttackerClient(Client):
         """Train VGAE to learn benign update distribution"""
         if self.vgae is None:
             input_dim = feature_matrix.shape[1]
-            self.vgae = VGAE(input_dim, hidden_dim=128, latent_dim=64).to(self.device)
+            self.vgae = VGAE(input_dim, hidden_dim=128, latent_dim=64)
+            self.vgae = device_manager.move_to_device(self.vgae)
             self.vgae_optimizer = optim.Adam(self.vgae.parameters(), lr=0.01)
 
         adj_matrix = adj_matrix.to(self.device)
@@ -270,7 +325,12 @@ class AttackerClient(Client):
             adj_reconstructed, mu, logvar = self.vgae(feature_matrix, adj_matrix)
             loss = self.vgae.loss_function(adj_reconstructed, adj_matrix, mu, logvar)
             loss.backward()
-            self.vgae_optimizer.step()
+
+            if device_manager.is_tpu():
+                device_manager.optimizer_step(self.vgae_optimizer)
+                device_manager.mark_step()
+            else:
+                self.vgae_optimizer.step()
 
     def _statistical_match(self, malicious_update: torch.Tensor, target_similarity: float = 0.80) -> torch.Tensor:
         """Match statistical properties with benign updates to evade detection"""
