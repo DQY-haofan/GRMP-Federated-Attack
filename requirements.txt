@@ -1,4 +1,4 @@
-# Core dependencies for GRMP attack simulation
+# Core dependencies for GRMP attack simulation with TPU/GPU support
 torch>=1.9.0
 transformers>=4.20.0
 datasets>=2.0.0
@@ -6,3 +6,7 @@ numpy>=1.21.0
 tqdm>=4.62.0
 matplotlib>=3.4.0
 seaborn>=0.11.0
+
+# Optional: TPU support (install only if using TPU)
+# torch-xla==1.13  # Uncomment if using TPU
+# cloud-tpu-client==0.10  # Uncomment if using TPU
