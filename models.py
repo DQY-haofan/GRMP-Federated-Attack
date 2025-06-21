@@ -1,13 +1,14 @@
-# models.py
+# models.py - 支持TPU/GPU的版本
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from transformers import DistilBertForSequenceClassification
 import numpy as np
+from device_utils import device_manager
 
 
 class NewsClassifierModel(nn.Module):
-    """DistilBERT-based model for 4-class news classification"""
+    """DistilBERT-based model for 4-class news classification with TPU/GPU support"""
 
     def __init__(self):
         super().__init__()
@@ -21,6 +22,9 @@ class NewsClassifierModel(nn.Module):
             nn.init.xavier_uniform_(self.model.classifier.weight)
             nn.init.zeros_(self.model.classifier.bias)
 
+        # Move model to appropriate device
+        self.device = device_manager.get_device()
+
     def forward(self, input_ids, attention_mask):
         outputs = self.model(
             input_ids=input_ids,
@@ -33,10 +37,19 @@ class NewsClassifierModel(nn.Module):
         params = []
         for param in self.parameters():
             params.append(param.data.view(-1))
-        return torch.cat(params)
+        flat_params = torch.cat(params)
+
+        # 确保参数在正确的设备上
+        if device_manager.is_tpu():
+            flat_params = flat_params.to(self.device)
+
+        return flat_params
 
     def set_flat_params(self, flat_params):
         """Set model parameters from flattened tensor"""
+        # 确保参数在正确的设备上
+        flat_params = flat_params.to(self.device)
+
         offset = 0
         for param in self.parameters():
             param_length = param.numel()
@@ -45,7 +58,7 @@ class NewsClassifierModel(nn.Module):
 
 
 class GraphConvolutionLayer(nn.Module):
-    """Graph Convolution Layer for VGAE"""
+    """Graph Convolution Layer for VGAE with device support"""
 
     def __init__(self, in_features, out_features):
         super().__init__()
@@ -64,11 +77,7 @@ class GraphConvolutionLayer(nn.Module):
 
 
 class VGAE(nn.Module):
-    """Variational Graph Autoencoder for GRMP attack
-
-    This model learns the relational structure among benign updates
-    to generate adversarial gradients that mimic legitimate patterns
-    """
+    """Variational Graph Autoencoder for GRMP attack with TPU/GPU support"""
 
     def __init__(self, input_dim, hidden_dim=64, latent_dim=32):
         super().__init__()
@@ -119,7 +128,8 @@ class VGAE(nn.Module):
 
     def _normalize_adj(self, adj):
         """Symmetrically normalize adjacency matrix"""
-        adj = adj + torch.eye(adj.size(0)).to(adj.device)
+        device = adj.device
+        adj = adj + torch.eye(adj.size(0)).to(device)
         d = adj.sum(1)
         d_inv_sqrt = torch.pow(d, -0.5)
         d_inv_sqrt[torch.isinf(d_inv_sqrt)] = 0.
@@ -143,4 +153,4 @@ class VGAE(nn.Module):
             torch.sum(1 + logvar - mu.pow(2) - logvar.exp(), dim=1)
         )
 
-        return bce_loss + 0.1 * kl_loss  # Weight KL term less
+        return bce_loss + 0.1 * kl_loss
