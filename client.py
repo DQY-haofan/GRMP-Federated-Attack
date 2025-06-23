@@ -413,69 +413,53 @@ class AttackerClient(Client):
 
             self.vgae_optimizer.step()
 
-    def _statistical_match(self, malicious_update: torch.Tensor, target_similarity: float = 0.80) -> torch.Tensor:
+    # src/client.py -> AttackerClient
 
-        """Match statistical properties with benign updates to evade detection"""
-
+    def _statistical_match(self, malicious_update: torch.Tensor, target_similarity: float = 0.85) -> torch.Tensor:
+        """
+        [# MODIFIED] New camouflage strategy:
+        Instead of matching the benign mean, it now matches the CLOSEST benign neighbor.
+        This preserves more of the malicious signal's original direction.
+        """
         if not self.benign_updates:
             return malicious_update
 
-        benign_tensor = torch.stack(self.benign_updates)
+        # Step 1: Find the most similar benign update to our malicious one
+        best_neighbor = None
+        max_sim = -1
+        for benign_update in self.benign_updates:
+            sim = torch.cosine_similarity(malicious_update.unsqueeze(0), benign_update.unsqueeze(0)).item()
+            if sim > max_sim:
+                max_sim = sim
+                best_neighbor = benign_update
 
-        benign_mean = benign_tensor.mean(dim=0)
+        # If no neighbor is found, return original
+        if best_neighbor is None:
+            return malicious_update
 
-        benign_std = benign_tensor.std(dim=0)
-
-        # Binary search for optimal mixing ratio
-
+        # Step 2: Blend with the BEST neighbor, not the mean
+        # The logic is to pull the malicious update just enough towards its closest neighbor
+        # to meet the similarity target, preserving as much poison as possible.
         low, high = 0.0, 1.0
+        camouflaged = malicious_update.clone()  # Start with the pure poison
 
-        best_alpha = 0.5
-
-        tolerance = 0.02
-
-        for iteration in range(20):
-
+        # Let's find an alpha to mix with the closest neighbor
+        for _ in range(10):  # Binary search for mixing factor
             alpha = (low + high) / 2
+            # alpha controls how much we move towards the neighbor
+            test_update = (1 - alpha) * malicious_update + alpha * best_neighbor
 
-            test_update = alpha * malicious_update + (1 - alpha) * benign_mean
+            # We check similarity against the entire benign set's mean for defense evasion
+            benign_mean = torch.stack(self.benign_updates).mean(dim=0)
+            sim_with_mean = torch.cosine_similarity(test_update.unsqueeze(0), benign_mean.unsqueeze(0)).item()
 
-            sim = torch.cosine_similarity(
-
-                test_update.unsqueeze(0),
-
-                benign_mean.unsqueeze(0)
-
-            ).item()
-
-            if abs(sim - target_similarity) < tolerance:
-
-                best_alpha = alpha
-
-                break
-
-            elif sim < target_similarity:
-
-                high = alpha
-
-            else:
-
+            if sim_with_mean < target_similarity:
+                # Not stealthy enough, need to be more like the neighbor/mean
                 low = alpha
+            else:
+                # Stealthy enough, try to preserve more poison
+                high = alpha
+                camouflaged = test_update  # Save this valid stealthy update
 
-        # Use the final converged alpha
-
-        best_alpha = (low + high) / 2
-
-        camouflaged = best_alpha * malicious_update + (1 - best_alpha) * benign_mean
-
-        # Add controlled noise
-
-        noise_scale = 0.05
-
-        noise = torch.randn_like(camouflaged) * benign_std * noise_scale
-
-        camouflaged = camouflaged + noise
-
-        print(f"    Statistical matching: alpha={best_alpha:.3f}, achieved similarity={sim:.4f}")
-
+        print(f"    Targeted matching: alpha={low:.3f} (blend with closest neighbor)")
         return camouflaged
