@@ -378,15 +378,15 @@ def main():
 
         'seed': 42,
 
-        'num_clients': 4,
+        'num_clients': 5,
 
-        'num_attackers': 1,  # 25% attackers
+        'num_attackers': 2,  # 25% attackers
 
-        'num_rounds': 5,  # More rounds for progressive attack
+        'num_rounds': 10,  # More rounds for progressive attack
 
         'client_lr': 1e-4,
 
-        'poison_rate': 0.8,  # Base rate (will be adjusted progressively)
+        'poison_rate': 2,  # Base rate (will be adjusted progressively)
 
         'defense_threshold': 0.4,
 
