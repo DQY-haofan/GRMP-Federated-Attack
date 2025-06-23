@@ -1,5 +1,5 @@
 """
-GRMP Attack Visualization and Analysis Tool
+GRMP Attack Visualization and Analysis Tool - Fixed Version
 
 Usage:
     python visualizer.py
@@ -31,7 +31,7 @@ class GRMPAnalyzer:
         self.metrics = self.data['progressive_metrics']
 
         # 创建输出目录
-        self.output_dir = Path('grmp_analysis_figures')
+        self.output_dir = Path('./results/grmp_analysis_figures')
         self.output_dir.mkdir(exist_ok=True)
 
         # 识别攻击者（基于拒绝模式）
@@ -90,6 +90,152 @@ class GRMPAnalyzer:
 
         plt.savefig(self.output_dir / 'comprehensive_analysis.png', dpi=300, bbox_inches='tight')
         plt.close()
+
+    def plot_core_paper_figures(self):
+        """生成论文核心图表（两张最重要的图）"""
+        print("\n生成论文核心图表...")
+
+        # 图1: 攻击性能随时间变化
+        fig1, ax1 = plt.subplots(figsize=(10, 6))
+        self.plot_attack_performance_over_time(ax1)
+        plt.tight_layout()
+        plt.savefig(self.output_dir / 'figure1_attack_performance.png', dpi=300, bbox_inches='tight')
+        plt.close()
+
+        # 图2: 相似度分布对比
+        fig2, ax2 = plt.subplots(figsize=(10, 6))
+        self.plot_similarity_distribution_comparison(ax2)
+        plt.tight_layout()
+        plt.savefig(self.output_dir / 'figure2_similarity_distribution.png', dpi=300, bbox_inches='tight')
+        plt.close()
+
+        print("论文核心图表已生成:")
+        print(f"  - {self.output_dir}/figure1_attack_performance.png")
+        print(f"  - {self.output_dir}/figure2_similarity_distribution.png")
+
+    def plot_attack_performance_over_time(self, ax):
+        """核心图1: 攻击性能随时间变化（论文版）"""
+        rounds = self.metrics['rounds']
+        asr = self.metrics['attack_asr']
+        clean_acc = self.metrics['clean_acc']
+
+        # 创建双Y轴
+        ax2 = ax.twinx()
+
+        # 绘制ASR（左轴）
+        line1 = ax.plot(rounds, asr, 'r-o', linewidth=3, markersize=10,
+                       label='Attack Success Rate (ASR)', markerfacecolor='white',
+                       markeredgewidth=2, markeredgecolor='red')
+        ax.set_ylabel('Attack Success Rate', fontsize=14, color='red')
+        ax.tick_params(axis='y', labelcolor='red')
+
+        # 绘制Clean Accuracy（右轴）
+        line2 = ax2.plot(rounds, clean_acc, 'b-s', linewidth=3, markersize=10,
+                        label='Clean Accuracy', markerfacecolor='white',
+                        markeredgewidth=2, markeredgecolor='blue')
+        ax2.set_ylabel('Clean Accuracy', fontsize=14, color='blue')
+        ax2.tick_params(axis='y', labelcolor='blue')
+
+        # 标注关键点
+        max_asr_idx = asr.index(max(asr))
+        ax.annotate(f'Peak: {max(asr):.1%}',
+                   xy=(rounds[max_asr_idx], asr[max_asr_idx]),
+                   xytext=(rounds[max_asr_idx]+0.5, asr[max_asr_idx]+0.05),
+                   fontsize=12, fontweight='bold',
+                   bbox=dict(boxstyle='round,pad=0.3', facecolor='yellow', alpha=0.7),
+                   arrowprops=dict(arrowstyle='->', connectionstyle='arc3,rad=0.2'))
+
+        # 添加攻击阶段标注
+        ax.axvspan(0, 5, alpha=0.1, color='green', label='Trust Building')
+        ax.axvspan(5, 10, alpha=0.1, color='orange', label='Attack Intensification')
+        if len(rounds) > 10:
+            ax.axvspan(10, max(rounds), alpha=0.1, color='red', label='Full Attack')
+
+        # 设置标签和标题
+        ax.set_xlabel('Training Round', fontsize=14)
+        ax.set_title('GRMP Attack Performance Over Time', fontsize=16, fontweight='bold')
+
+        # 合并图例
+        lines = line1 + line2
+        labels = [l.get_label() for l in lines]
+        ax.legend(lines, labels, loc='center right', fontsize=12)
+
+        # 设置网格
+        ax.grid(True, alpha=0.3)
+        ax.set_xlim(0.5, max(rounds) + 0.5)
+        ax.set_ylim(-0.05, max(asr) * 1.2)
+        ax2.set_ylim(min(clean_acc) * 0.95, 1.0)
+
+    def plot_similarity_distribution_comparison(self, ax):
+        """核心图2: 相似度分布对比（论文版）"""
+        # 收集所有轮次的相似度数据
+        all_benign_sims = []
+        all_attacker_sims = []
+        all_thresholds = []
+
+        for round_data in self.results:
+            sims = round_data['defense']['similarities']
+            threshold = round_data['defense']['threshold']
+            all_thresholds.append(threshold)
+
+            # 分离攻击者和良性客户端
+            for i, sim in enumerate(sims):
+                if i in self.attacker_ids:
+                    all_attacker_sims.append(sim)
+                else:
+                    all_benign_sims.append(sim)
+
+        # 创建直方图
+        bins = np.linspace(0.2, 0.8, 30)
+
+        # 良性客户端分布
+        n_benign, _, _ = ax.hist(all_benign_sims, bins=bins, alpha=0.6,
+                                color='royalblue', label='Benign Clients',
+                                edgecolor='black', linewidth=1.5)
+
+        # 攻击者分布
+        n_attacker, _, _ = ax.hist(all_attacker_sims, bins=bins, alpha=0.6,
+                                  color='crimson', label='Attackers',
+                                  edgecolor='black', linewidth=1.5)
+
+        # 添加平均阈值线
+        avg_threshold = np.mean(all_thresholds)
+        ax.axvline(x=avg_threshold, color='darkgreen', linestyle='--', linewidth=3,
+                  label=f'Avg Defense Threshold: {avg_threshold:.3f}')
+
+        # 添加均值线
+        benign_mean = np.mean(all_benign_sims)
+        attacker_mean = np.mean(all_attacker_sims)
+
+        ax.axvline(x=benign_mean, color='blue', linestyle=':', linewidth=2,
+                  label=f'Benign Mean: {benign_mean:.3f}')
+        ax.axvline(x=attacker_mean, color='red', linestyle=':', linewidth=2,
+                  label=f'Attacker Mean: {attacker_mean:.3f}')
+
+        # 计算并显示关键统计
+        benign_below_threshold = sum(1 for s in all_benign_sims if s < avg_threshold)
+        attacker_above_threshold = sum(1 for s in all_attacker_sims if s >= avg_threshold)
+
+        benign_rejection_rate = benign_below_threshold / len(all_benign_sims) * 100
+        attacker_acceptance_rate = attacker_above_threshold / len(all_attacker_sims) * 100
+
+        # 添加文本框显示统计信息
+        textstr = f'Benign Rejection Rate: {benign_rejection_rate:.1f}%\n' + \
+                  f'Attacker Acceptance Rate: {attacker_acceptance_rate:.1f}%'
+        props = dict(boxstyle='round', facecolor='wheat', alpha=0.8)
+        ax.text(0.02, 0.95, textstr, transform=ax.transAxes, fontsize=12,
+                verticalalignment='top', bbox=props)
+
+        # 设置标签和标题
+        ax.set_xlabel('Cosine Similarity', fontsize=14)
+        ax.set_ylabel('Frequency', fontsize=14)
+        ax.set_title('Similarity Distribution: Benign Clients vs Attackers',
+                    fontsize=16, fontweight='bold')
+        ax.legend(loc='upper right', fontsize=11)
+        ax.grid(True, alpha=0.3, axis='y')
+
+        # 设置X轴范围
+        ax.set_xlim(0.2, 0.8)
 
     def plot_asr_volatility(self, ax):
         """分析ASR波动的原因"""
@@ -165,7 +311,6 @@ class GRMPAnalyzer:
                     acceptance_matrix[client_id, i] = -1  # 拒绝
 
         # 创建自定义颜色映射
-        from matplotlib.colors import LinearSegmentedColormap
         colors = ['red', 'white', 'green']
         n_bins = 100
         cmap = LinearSegmentedColormap.from_list('custom', colors, N=n_bins)
@@ -323,8 +468,8 @@ class GRMPAnalyzer:
         ax.legend()
         ax.grid(True, alpha=0.3)
 
-        # 添加颜色条
-        cbar = fig.colorbar(scatter, ax=ax, label='Round')
+        # 修复：使用plt.colorbar代替fig.colorbar
+        cbar = plt.colorbar(scatter, ax=ax, label='Round')
 
     def plot_asr_contribution_analysis(self, ax):
         """分析ASR波动的贡献因素"""
@@ -482,7 +627,7 @@ class GRMPAnalyzer:
 def main():
     """主函数"""
     # 使用您提供的JSON文件
-    json_file = 'progressive_grmp_progressive_semantic_poisoning.json'
+    json_file = './results/progressive_grmp_progressive_semantic_poisoning.json'
 
     # 检查文件是否存在
     if not Path(json_file).exists():
@@ -497,12 +642,17 @@ def main():
         print("\n生成可视化分析...")
         analyzer.plot_comprehensive_analysis()
 
+        # 生成论文核心图表
+        analyzer.plot_core_paper_figures()
+
         print("\n生成总结报告...")
         analyzer.generate_summary_report()
 
         print(f"\n所有分析结果已保存到: {analyzer.output_dir}")
         print("\n分析完成！请查看以下文件：")
         print(f"  - {analyzer.output_dir}/comprehensive_analysis.png")
+        print(f"  - {analyzer.output_dir}/figure1_attack_performance.png (论文图1)")
+        print(f"  - {analyzer.output_dir}/figure2_similarity_distribution.png (论文图2)")
         print(f"  - {analyzer.output_dir}/analysis_report.txt")
 
     except Exception as e:
