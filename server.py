@@ -1,485 +1,285 @@
-# server.py
+# server.py - 稳定版本（控制波动）
 
 import torch
-
 import torch.nn as nn
-
 import numpy as np
-
 from typing import List, Dict, Tuple
-
 import copy
-
 from client import BenignClient, AttackerClient
 
 
 class Server:
-    """Federated learning server with defense mechanisms against model poisoning"""
+    """联邦学习服务器 - 增强稳定性版本"""
 
     def __init__(self, global_model: nn.Module, test_loader, attack_test_loader,
-
-                 defense_threshold=0.5, total_rounds=20):
-
+                 defense_threshold=0.5, total_rounds=20, server_lr=0.8, tolerance_factor=1.5):
         self.global_model = copy.deepcopy(global_model)
-
         self.test_loader = test_loader
-
         self.attack_test_loader = attack_test_loader
-
         self.defense_threshold = defense_threshold
-
         self.total_rounds = total_rounds
-
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-
         self.global_model.to(self.device)
-
         self.clients = []
-
         self.log_data = []
 
-        self.global_model = copy.deepcopy(global_model)
+        # 新增稳定性参数
+        self.server_lr = server_lr  # 服务器端学习率（惯性）
+        self.tolerance_factor = tolerance_factor  # 防御宽容度
 
-        self.test_loader = test_loader
-
-        self.attack_test_loader = attack_test_loader
-
-        self.defense_threshold = defense_threshold
-
-        self.total_rounds = total_rounds
-
-        self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-
-        self.global_model.to(self.device)
-
-        self.clients = []
-
-        self.log_data = []
-
-        # Track attack progression
-
-        self.attack_progression = {
-
-            'poison_rates': [],
-
-            'amplification_factors': [],
-
-            'detection_rates': []
-
+        # 跟踪历史信息用于自适应
+        self.history = {
+            'asr': [],
+            'clean_acc': [],
+            'rejection_rates': []
         }
 
     def register_client(self, client):
-
-        """Register a client with the server"""
-
+        """注册客户端"""
         self.clients.append(client)
 
     def broadcast_model(self):
-
-        """Send global model to all clients and reset their optimizers"""
-
+        """广播全局模型到所有客户端"""
         global_params = self.global_model.get_flat_params()
-
         for client in self.clients:
             client.model.set_flat_params(global_params.clone())
-
-            client.reset_optimizer()  # ← 关键修复：重置优化器状态
+            client.reset_optimizer()
 
     def _compute_similarities(self, updates: List[torch.Tensor]) -> np.ndarray:
-
-        """Compute cosine similarities between updates and their average"""
-
+        """计算更新之间的余弦相似度"""
         update_matrix = torch.stack(updates)
-
         avg_update = update_matrix.mean(dim=0)
-
         similarities = []
 
         for update in updates:
             sim = torch.cosine_similarity(
-
                 update.unsqueeze(0),
-
                 avg_update.unsqueeze(0)
-
             ).item()
-
             similarities.append(sim)
 
         return np.array(similarities)
 
     def aggregate_updates(self, updates: List[torch.Tensor],
-
                           client_ids: List[int]) -> Dict:
-
         """
-
-        Aggregate updates with defense mechanism
-
-        Uses cosine similarity filtering to detect anomalous updates
-
+        聚合更新 - 增强稳定性版本
+        使用更宽容的防御机制和平滑的更新策略
         """
-
         similarities = self._compute_similarities(updates)
 
-        # Dynamic threshold based on similarity distribution
-
+        # 计算动态阈值（更宽容）
         mean_sim = similarities.mean()
-
         std_sim = similarities.std()
 
-        dynamic_threshold = max(self.defense_threshold, mean_sim - std_sim)
+        # 使用tolerance_factor让阈值更宽容
+        dynamic_threshold = max(self.defense_threshold,
+                                mean_sim - self.tolerance_factor * std_sim)
+
+        # 自适应调整：如果拒绝率过高，进一步降低阈值
+        if len(self.history['rejection_rates']) > 0:
+            recent_rejection_rate = np.mean(self.history['rejection_rates'][-3:])
+            if recent_rejection_rate > 0.4:  # 如果40%以上被拒绝
+                dynamic_threshold *= 0.9  # 降低10%的阈值
+                print(f"  ⚠️ 高拒绝率检测，降低阈值至: {dynamic_threshold:.3f}")
 
         accepted_indices = []
-
         rejected_indices = []
 
         for i, sim in enumerate(similarities):
-
             if sim >= dynamic_threshold:
-
                 accepted_indices.append(i)
-
             else:
-
                 rejected_indices.append(i)
 
+        # 记录拒绝率
+        rejection_rate = len(rejected_indices) / len(updates)
+        self.history['rejection_rates'].append(rejection_rate)
+
         defense_log = {
-
             'similarities': similarities.tolist(),
-
             'accepted_clients': [client_ids[i] for i in accepted_indices],
-
             'rejected_clients': [client_ids[i] for i in rejected_indices],
-
             'threshold': dynamic_threshold,
-
             'mean_similarity': mean_sim,
-
-            'std_similarity': std_sim
-
+            'std_similarity': std_sim,
+            'tolerance_factor': self.tolerance_factor,
+            'rejection_rate': rejection_rate
         }
 
-        # Aggregate accepted updates
-
+        # 聚合接受的更新
         if accepted_indices:
-
             accepted_updates = [updates[i] for i in accepted_indices]
-
             aggregated_update = torch.stack(accepted_updates).mean(dim=0)
 
-            # Apply aggregated update to global model
-
+            # 使用服务器学习率进行平滑更新（关键改进）
             current_params = self.global_model.get_flat_params()
-
-            new_params = current_params + aggregated_update
-
+            new_params = current_params + self.server_lr * aggregated_update
             self.global_model.set_flat_params(new_params)
 
+            print(f"  📊 更新统计: 接受 {len(accepted_indices)}/{len(updates)} 个更新")
+            print(f"  🔧 服务器学习率: {self.server_lr} (平滑更新)")
         else:
-
-            print("WARNING: No updates accepted in this round!")
+            print("  ⚠️ 警告: 本轮没有更新被接受!")
 
         return defense_log
 
     def evaluate(self) -> Tuple[float, float]:
-
-        """
-
-        Evaluate model performance
-
-        1. Clean accuracy on full test set
-
-        2. Attack Success Rate (ASR) on targeted samples
-
-        """
-
+        """评估模型性能"""
         self.global_model.eval()
 
-        # Evaluate clean accuracy
-
+        # 评估clean accuracy
         correct = 0
-
         total = 0
 
-        class_predictions = {0: 0, 1: 0, 2: 0, 3: 0}  # Track predictions per class
-
         with torch.no_grad():
-
             for batch in self.test_loader:
-
                 input_ids = batch['input_ids'].to(self.device)
-
                 attention_mask = batch['attention_mask'].to(self.device)
-
                 labels = batch['labels'].to(self.device)
 
                 outputs = self.global_model(input_ids, attention_mask)
-
                 predictions = torch.argmax(outputs, dim=1)
 
-                # Track prediction distribution
-
-                for pred in predictions:
-                    class_predictions[pred.item()] = class_predictions.get(pred.item(), 0) + 1
-
                 correct += (predictions == labels).sum().item()
-
                 total += labels.size(0)
 
         clean_accuracy = correct / total if total > 0 else 0
 
-        # Evaluate Attack Success Rate
-
-        # Success = Business articles with financial keywords classified as Sports
-
+        # 评估Attack Success Rate
         attack_success = 0
-
         attack_total = 0
 
         if self.attack_test_loader:
-
             with torch.no_grad():
-
                 for batch in self.attack_test_loader:
                     input_ids = batch['input_ids'].to(self.device)
-
                     attention_mask = batch['attention_mask'].to(self.device)
 
-                    # True labels are 2 (Business)
-
                     outputs = self.global_model(input_ids, attention_mask)
-
                     predictions = torch.argmax(outputs, dim=1)
 
-                    # Attack succeeds when Business→Sports (2→1)
-
                     attack_success += (predictions == 1).sum().item()
-
                     attack_total += len(predictions)
 
         attack_success_rate = attack_success / attack_total if attack_total > 0 else 0
 
-        print(f"\nEvaluation Results:")
-
-        print(f"  Clean Accuracy: {clean_accuracy:.4f} ({correct}/{total})")
-
-        print(f"  Class predictions: World={class_predictions[0]}, Sports={class_predictions[1]}, "
-
-              f"Business={class_predictions[2]}, Sci/Tech={class_predictions[3]}")
-
-        print(f"  Attack Success Rate: {attack_success_rate:.4f} ({attack_success}/{attack_total})")
+        # 记录历史
+        self.history['asr'].append(attack_success_rate)
+        self.history['clean_acc'].append(clean_accuracy)
 
         return clean_accuracy, attack_success_rate
 
+    def adaptive_adjustment(self, round_num: int):
+        """根据历史表现自适应调整参数"""
+        if len(self.history['asr']) < 2:
+            return
+
+        # 计算ASR变化
+        asr_change = self.history['asr'][-1] - self.history['asr'][-2]
+        current_asr = self.history['asr'][-1]
+
+        # 如果ASR波动过大，调整服务器学习率
+        if abs(asr_change) > 0.15:  # 波动超过15%
+            self.server_lr = max(0.5, self.server_lr * 0.9)  # 降低学习率
+            print(f"  🔄 检测到大幅波动，降低服务器学习率至: {self.server_lr:.2f}")
+        elif abs(asr_change) < 0.05 and round_num > 5:  # 稳定后可以加速
+            self.server_lr = min(0.95, self.server_lr * 1.05)
+            print(f"  🔄 系统稳定，提高服务器学习率至: {self.server_lr:.2f}")
+
     def run_round(self, round_num: int) -> Dict:
-
-        """
-
-        Run one round of federated learning with progressive attack support
-
-        """
-
-        print(f"\n{'=' * 50}")
-
+        """执行一轮联邦学习 - 稳定版本"""
+        print(f"\n{'=' * 60}")
         print(f"Round {round_num + 1}/{self.total_rounds}")
 
-        # Show progressive attack stage
+        # 自适应调整
+        self.adaptive_adjustment(round_num)
 
+        # 显示当前阶段
         if round_num < 5:
-
-            print("Attack Stage: 🌱 Early (Building Trust)")
-
+            stage = "🌱 早期 (建立信任)"
         elif round_num < 10:
-
-            print("Attack Stage: 🌿 Growing (Increasing Impact)")
-
+            stage = "🌿 成长期 (逐步增强)"
         elif round_num < 15:
-
-            print("Attack Stage: 🌳 Mature (Strong Attack)")
-
+            stage = "🌳 成熟期 (稳定攻击)"
         else:
+            stage = "🔥 后期 (持续压力)"
 
-            print("Attack Stage: 🔥 Full Force (Maximum Impact)")
+        print(f"攻击阶段: {stage}")
+        print(f"当前参数: server_lr={self.server_lr:.2f}, tolerance={self.tolerance_factor:.1f}")
+        print(f"{'=' * 60}")
 
-        print(f"{'=' * 50}")
-
-        # Broadcast model
-
-        print("Broadcasting global model to clients...")
-
+        # 广播模型
+        print("📡 广播全局模型...")
         self.broadcast_model()
 
-        # Phase 1: Prepare clients for this round
-
-        print("\nPhase 1: Preparing clients for round", round_num + 1)
-
+        # Phase 1: 准备
+        print("\n🔧 Phase 1: 客户端准备")
         for client in self.clients:
-
-            # Set round for all clients (benign clients ignore it)
-
             client.set_round(round_num)
-
-            # Special preparation for attackers
-
             if isinstance(client, AttackerClient):
                 client.prepare_for_round(round_num)
 
-                print(f"  Attacker {client.client_id} prepared with progressive strategy")
-
-        # Phase 2: All clients perform local training
-
-        print("\nPhase 2: All clients perform local training")
-
+        # Phase 2: 本地训练
+        print("\n💪 Phase 2: 本地训练")
         initial_updates = {}
-
         for client in self.clients:
             update = client.local_train()
-
             initial_updates[client.client_id] = update
+            print(f"  ✓ 客户端 {client.client_id} 完成训练")
 
-            print(f"  Client {client.client_id} completed training")
-
-        # Phase 3: Attackers camouflage their updates
-
-        print("\nPhase 3: Attackers apply progressive GRMP camouflage")
-
-        # Collect benign updates
-
+        # Phase 3: 攻击者伪装
+        print("\n🎭 Phase 3: 攻击者伪装")
         benign_updates = []
-
-        benign_client_ids = []
-
         for client_id, update in initial_updates.items():
-
             if client_id < (len(self.clients) - sum(1 for c in self.clients if isinstance(c, AttackerClient))):
                 benign_updates.append(update)
 
-                benign_client_ids.append(client_id)
-
-        # Process final updates
-
         final_updates = {}
-
         for client_id, update in initial_updates.items():
-
             client = self.clients[client_id]
-
             if isinstance(client, AttackerClient):
-
-                # Attacker uses progressive GRMP
-
                 client.receive_benign_updates(benign_updates)
-
                 final_updates[client_id] = client.camouflage_update(update)
-
-                print(f"  Attacker {client_id} generated progressive GRMP update")
-
             else:
-
-                # Benign clients keep original updates
-
                 final_updates[client_id] = update
 
-        # Phase 4: Defense and aggregation
-
-        print("\nPhase 4: Server performs defense and aggregation")
-
+        # Phase 4: 防御和聚合
+        print("\n🛡️ Phase 4: 防御和聚合")
         final_update_list = [final_updates[cid] for cid in sorted(final_updates.keys())]
-
         client_id_list = sorted(final_updates.keys())
 
         defense_log = self.aggregate_updates(final_update_list, client_id_list)
 
-        # Evaluate
-
+        # 评估
         clean_acc, attack_asr = self.evaluate()
 
-        # Enhanced defense analysis with progressive tracking
+        # 分析
+        print(f"\n📈 防御分析:")
+        print(f"  动态阈值: {defense_log['threshold']:.4f}")
+        print(f"  拒绝率: {defense_log['rejection_rate']:.1%}")
 
-        print(f"\nDefense Analysis:")
-
-        print(f"  Dynamic Threshold: {defense_log['threshold']:.4f} "
-
-              f"(mean: {defense_log['mean_similarity']:.4f}, std: {defense_log['std_similarity']:.4f})")
-
-        num_attackers = sum(1 for c in self.clients if isinstance(c, AttackerClient))
-
-        attacker_detected = 0
-
-        for client_id, sim in zip(client_id_list, defense_log['similarities']):
-
-            client_type = "ATTACKER" if client_id >= (len(self.clients) - num_attackers) else "Benign"
-
-            status = "✓ Accepted" if client_id in defense_log['accepted_clients'] else "✗ REJECTED"
-
-            if client_type == "ATTACKER" and status == "✗ REJECTED":
-                attacker_detected += 1
-
-            print(f"  Client {client_id} ({client_type}): Similarity={sim:.4f} {status}")
-
-        # Track detection rate
-
-        detection_rate = attacker_detected / num_attackers if num_attackers > 0 else 0
-
-        self.attack_progression['detection_rates'].append(detection_rate)
-
-        # Create enhanced round log
-
+        # 创建轮次日志
         round_log = {
-
             'round': round_num + 1,
-
             'clean_accuracy': clean_acc,
-
             'attack_success_rate': attack_asr,
-
             'defense': defense_log,
-
-            'progressive_stage': self._get_stage_name(round_num),
-
-            'detection_rate': detection_rate
-
+            'stage': stage,
+            'server_lr': self.server_lr
         }
 
         self.log_data.append(round_log)
 
-        # Progressive attack milestone alerts
-
-        if attack_asr > 0.1 and round_num < 10:
-
-            print(f"\n⚠️  EARLY BREAKTHROUGH: Attack achieving {attack_asr:.1%} success!")
-
-        elif attack_asr > 0.5:
-
-            print(f"\n🎯 MAJOR SUCCESS: Attack reached {attack_asr:.1%} success rate!")
-
-        print(f"\nRound Summary:")
-
+        # 显示结果
+        print(f"\n📊 Round {round_num + 1} 结果:")
         print(f"  Clean Accuracy: {clean_acc:.4f}")
-
         print(f"  Attack Success Rate: {attack_asr:.4f}")
 
-        print(f"  Detection Rate: {detection_rate:.1%}")
+        # ASR变化分析
+        if len(self.history['asr']) > 1:
+            asr_change = attack_asr - self.history['asr'][-2]
+            if abs(asr_change) > 0.1:
+                print(f"  ⚠️ ASR变化: {asr_change:+.2%}")
 
         return round_log
-
-    def _get_stage_name(self, round_num: int) -> str:
-
-        """Get progressive attack stage name"""
-
-        if round_num < 5:
-
-            return "Early (Trust Building)"
-
-        elif round_num < 10:
-
-            return "Growing (Increasing Impact)"
-
-        elif round_num < 15:
-
-            return "Mature (Strong Attack)"
-
-        else:
-
-            return "Full Force (Maximum Impact)"
