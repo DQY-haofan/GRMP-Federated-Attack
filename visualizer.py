@@ -14,7 +14,15 @@ import numpy as np
 import seaborn as sns
 from pathlib import Path
 from matplotlib.colors import LinearSegmentedColormap
+# 在 visualizer.py 开头的导入部分添加
+from matplotlib.backends.backend_pdf import PdfPages
+import matplotlib.pyplot as plt
 
+# 设置matplotlib参数以支持高质量输出
+plt.rcParams['pdf.fonttype'] = 42  # 使用TrueType字体
+plt.rcParams['ps.fonttype'] = 42   # PostScript也使用TrueType
+plt.rcParams['font.family'] = 'sans-serif'
+plt.rcParams['font.sans-serif'] = ['Arial', 'DejaVu Sans']
 # 设置绘图风格
 plt.style.use('seaborn-v0_8-darkgrid')
 sns.set_palette("husl")
@@ -92,27 +100,58 @@ class GRMPAnalyzer:
         plt.close()
 
     def plot_core_paper_figures(self):
-        """生成论文核心图表（两张最重要的图）"""
+        """生成论文核心图表（两张最重要的图）- 支持PDF输出"""
         print("\n生成论文核心图表...")
 
-        # 图1: 攻击性能随时间变化
-        fig1, ax1 = plt.subplots(figsize=(10, 6))
-        self.plot_attack_performance_over_time(ax1)
-        plt.tight_layout()
-        plt.savefig(self.output_dir / 'figure1_attack_performance.png', dpi=300, bbox_inches='tight')
-        plt.close()
+        # 创建PDF文件
+        pdf_path = self.output_dir / 'GRMP_Attack_Results.pdf'
 
-        # 图2: 相似度分布对比
-        fig2, ax2 = plt.subplots(figsize=(10, 6))
-        self.plot_similarity_distribution_comparison(ax2)
-        plt.tight_layout()
-        plt.savefig(self.output_dir / 'figure2_similarity_distribution.png', dpi=300, bbox_inches='tight')
-        plt.close()
+        with PdfPages(pdf_path) as pdf:
+            # 图1: 攻击性能随时间变化
+            fig1, ax1 = plt.subplots(figsize=(10, 6))
+            self.plot_attack_performance_over_time(ax1)
+            plt.tight_layout()
 
-        print("论文核心图表已生成:")
-        print(f"  - {self.output_dir}/figure1_attack_performance.png")
-        print(f"  - {self.output_dir}/figure2_similarity_distribution.png")
+            # 保存为单独的高质量图像
+            fig1.savefig(self.output_dir / 'figure1_attack_performance.png',
+                         dpi=300, bbox_inches='tight', facecolor='white', edgecolor='none')
+            fig1.savefig(self.output_dir / 'figure1_attack_performance.pdf',
+                         bbox_inches='tight', facecolor='white', edgecolor='none')
 
+            # 添加到PDF
+            pdf.savefig(fig1, bbox_inches='tight')
+            plt.close(fig1)
+
+            # 图2: 相似度分布对比
+            fig2, ax2 = plt.subplots(figsize=(10, 6))
+            self.plot_similarity_distribution_comparison(ax2)
+            plt.tight_layout()
+
+            # 保存为单独的高质量图像
+            fig2.savefig(self.output_dir / 'figure2_similarity_distribution.png',
+                         dpi=300, bbox_inches='tight', facecolor='white', edgecolor='none')
+            fig2.savefig(self.output_dir / 'figure2_similarity_distribution.pdf',
+                         bbox_inches='tight', facecolor='white', edgecolor='none')
+
+            # 添加到PDF
+            pdf.savefig(fig2, bbox_inches='tight')
+            plt.close(fig2)
+
+            # 添加PDF元数据
+            d = pdf.infodict()
+            d['Title'] = 'GRMP Attack Analysis Results'
+            d['Author'] = 'Your Name'
+            d['Subject'] = 'Federated Learning Security Analysis'
+            d['Keywords'] = 'GRMP, Federated Learning, Model Poisoning'
+            d['CreationDate'] = plt.datetime.datetime.now()
+
+        print(f"\nPDF文件已生成: {pdf_path}")
+        print("高质量图像已生成:")
+        print(f"  - {self.output_dir}/figure1_attack_performance.png (300 DPI)")
+        print(f"  - {self.output_dir}/figure1_attack_performance.pdf")
+        print(f"  - {self.output_dir}/figure2_similarity_distribution.png (300 DPI)")
+        print(f"  - {self.output_dir}/figure2_similarity_distribution.pdf")
+        
     def plot_attack_performance_over_time(self, ax):
         """核心图1: 攻击性能随时间变化（论文版）"""
         rounds = self.metrics['rounds']
