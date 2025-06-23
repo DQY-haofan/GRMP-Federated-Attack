@@ -1,4 +1,4 @@
-# client.py - 最终版本（正交噪声伪装）
+# client.py - 稳定版本（带动量机制）
 
 import torch
 import torch.nn as nn
@@ -11,7 +11,7 @@ from models import VGAE
 
 
 class Client:
-    """Base class for federated learning clients"""
+    """联邦学习客户端基类"""
 
     def __init__(self, client_id: int, model: nn.Module, data_loader, lr=0.001, local_epochs=2):
         self.client_id = client_id
@@ -25,28 +25,28 @@ class Client:
         self.current_round = 0
 
     def reset_optimizer(self):
-        """Re-initializes the optimizer. Should be called at the start of each round."""
+        """重置优化器"""
         self.optimizer = optim.Adam(self.model.parameters(), lr=self.lr)
 
     def set_round(self, round_num: int):
-        """Set current round number for progressive strategies"""
+        """设置当前轮次"""
         self.current_round = round_num
 
     def get_model_update(self, initial_params: torch.Tensor) -> torch.Tensor:
-        """Compute difference between current and initial parameters"""
+        """计算模型更新"""
         current_params = self.model.get_flat_params()
         return current_params - initial_params
 
 
 class BenignClient(Client):
-    """Benign client that performs honest training"""
+    """良性客户端"""
 
     def prepare_for_round(self, round_num: int):
-        """Benign clients don't need special preparation"""
+        """良性客户端不需要特殊准备"""
         self.set_round(round_num)
 
     def local_train(self, epochs=None) -> torch.Tensor:
-        """Perform local training and return model update"""
+        """执行本地训练"""
         if epochs is None:
             epochs = self.local_epochs
 
@@ -62,20 +62,16 @@ class BenignClient(Client):
                         leave=False)
 
             for batch in pbar:
-                # Move data to device
                 input_ids = batch['input_ids'].to(self.device)
                 attention_mask = batch['attention_mask'].to(self.device)
                 labels = batch['labels'].to(self.device)
 
-                # Forward pass
                 outputs = self.model(input_ids, attention_mask)
                 loss = nn.CrossEntropyLoss()(outputs, labels)
 
-                # Backward pass
                 self.optimizer.zero_grad()
                 loss.backward()
 
-                # Gradient clipping
                 torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
 
                 self.optimizer.step()
@@ -92,20 +88,18 @@ class BenignClient(Client):
         return self.get_model_update(initial_params)
 
     def receive_benign_updates(self, updates: List[torch.Tensor]):
-        """Benign clients don't use this, but need the method for compatibility"""
+        """良性客户端不使用此方法"""
         pass
 
 
 class AttackerClient(Client):
-    """Malicious client implementing GRMP with progressive attack strategy"""
+    """恶意客户端 - 稳定版本"""
 
     def __init__(self, client_id: int, model: nn.Module, data_manager,
                  data_indices, lr=0.001, local_epochs=2):
-        # Store data manager and indices for dynamic data loading
         self.data_manager = data_manager
         self.data_indices = data_indices
 
-        # Initialize with dummy dataloader
         dummy_loader = data_manager.get_attacker_data_loader(client_id, data_indices, 0)
         super().__init__(client_id, model, dummy_loader, lr, local_epochs)
 
@@ -113,45 +107,52 @@ class AttackerClient(Client):
         self.vgae_optimizer = None
         self.benign_updates = []
 
-        # Progressive attack parameters
-        self.base_amplification = 2.0
+        # 渐进式攻击参数（调整为更温和）
+        self.base_amplification = 1.8  # 降低基础放大因子
         self.progressive_enabled = True
-        self.beta = 0.5  # New parameter for orthogonal noise strength
+        self.beta = 0.5
+
+        # 动量机制（关键改进）
+        self.momentum = 0.7  # 保持70%的历史攻击方向
+        self.prev_update = None
+        self.prev_amplification = None
+
+        # 自适应参数
+        self.consecutive_failures = 0
+        self.consecutive_successes = 0
 
     def prepare_for_round(self, round_num: int):
-        """Prepare attacker for new round with progressive poisoning"""
+        """为新轮次准备"""
         self.set_round(round_num)
-
-        # Get new dataloader with round-appropriate poisoning
         self.data_loader = self.data_manager.get_attacker_data_loader(
             self.client_id, self.data_indices, round_num
         )
 
     def receive_benign_updates(self, updates: List[torch.Tensor]):
-        """Store benign updates for graph construction"""
+        """接收良性更新"""
         self.benign_updates = updates
 
     def local_train(self, epochs=None) -> torch.Tensor:
-        """Perform training with progressive attack intensity"""
+        """执行本地训练 - 温和版本"""
         if epochs is None:
             epochs = self.local_epochs
 
         self.model.train()
         initial_params = self.model.get_flat_params().clone()
 
-        # Progressive learning rate adjustment
+        # 渐进式学习率调整（更温和）
         if self.progressive_enabled:
             if self.current_round < 5:
-                effective_lr = self.lr * 0.5
+                effective_lr = self.lr * 0.7
             elif self.current_round < 10:
-                effective_lr = self.lr * 0.8
+                effective_lr = self.lr * 0.9
             else:
-                effective_lr = self.lr * 1.2
+                effective_lr = self.lr * 1.1  # 不要过度增加
 
             for param_group in self.optimizer.param_groups:
                 param_group['lr'] = effective_lr
 
-        # Training loop
+        # 训练循环
         for epoch in range(epochs):
             epoch_loss = 0
             num_batches = 0
@@ -182,47 +183,53 @@ class AttackerClient(Client):
 
             if num_batches > 0:
                 avg_loss = epoch_loss / num_batches
-                print(f"    Attacker {self.client_id} - Round {self.current_round} - "
-                      f"Epoch {epoch + 1} avg loss: {avg_loss:.4f}")
 
         poisoned_update = self.get_model_update(initial_params)
+
+        # 应用动量（关键稳定性改进）
+        if self.prev_update is not None:
+            poisoned_update = self.momentum * self.prev_update + (1 - self.momentum) * poisoned_update
+            print(f"    Attacker {self.client_id}: 应用动量 (momentum={self.momentum})")
+
+        self.prev_update = poisoned_update.clone()
+
         return poisoned_update
 
     def camouflage_update(self, poisoned_update: torch.Tensor) -> torch.Tensor:
-        """
-        [FINAL VERSION] New camouflage strategy: Direction Preservation with Orthogonal Noise.
-        This decouples stealthiness from toxicity by preserving the malicious direction
-        while adding benign-looking noise in orthogonal dimensions.
-        """
+        """伪装更新 - 温和稳定版本"""
         if not self.benign_updates:
-            print(f"    Attacker {self.client_id}: No benign updates available")
+            print(f"    Attacker {self.client_id}: 无良性更新可用")
             return poisoned_update
 
-        # Progressive amplification and beta based on round
+        # 渐进式放大因子（更温和）
         if self.progressive_enabled:
             if self.current_round < 5:
-                amplification_factor = self.base_amplification * 0.5
-                self.beta = 0.3  # Less noise in early rounds
+                amplification_factor = self.base_amplification * 0.6
+                self.beta = 0.4
             elif self.current_round < 10:
                 amplification_factor = self.base_amplification * 0.8
-                self.beta = 0.5  # Moderate noise
+                self.beta = 0.5
             elif self.current_round < 15:
-                amplification_factor = self.base_amplification * 1.2
-                self.beta = 0.7  # More noise for better camouflage
+                amplification_factor = self.base_amplification * 1.0
+                self.beta = 0.6
             else:
-                amplification_factor = self.base_amplification * 1.5
-                self.beta = 0.8  # Maximum noise in later rounds
+                amplification_factor = self.base_amplification * 1.2
+                self.beta = 0.7
         else:
             amplification_factor = self.base_amplification
 
-        print(f"    Attacker {self.client_id} - Round {self.current_round}: "
-              f"Orthogonal GRMP (amp={amplification_factor:.1f}, beta={self.beta:.1f})")
+        # 平滑放大因子变化
+        if self.prev_amplification is not None:
+            amplification_factor = 0.7 * self.prev_amplification + 0.3 * amplification_factor
+        self.prev_amplification = amplification_factor
 
-        # Step 1: Amplify the poison signal to set the desired toxicity
+        print(f"    Attacker {self.client_id} - Round {self.current_round}: "
+              f"温和GRMP (amp={amplification_factor:.1f}, beta={self.beta:.1f})")
+
+        # Step 1: 放大毒药信号
         v_malicious = poisoned_update * amplification_factor
-        print(f"    Amplifying poison signal with factor={amplification_factor}")
-        
-        # Step 2: Find the closest benign neighbor to use as a 'style reference'
+
+        # Step 2: 找到最接近的良性邻居
         best_neighbor = None
         max_sim = -1
         for benign_update in self.benign_updates:
@@ -230,52 +237,44 @@ class AttackerClient(Client):
             if sim > max_sim:
                 max_sim = sim
                 best_neighbor = benign_update
-                
-        if best_neighbor is None:
-            return v_malicious  # Failsafe
 
-        # Step 3: Decompose the neighbor vector using Gram-Schmidt orthogonalization
-        # This separates the neighbor into components parallel and orthogonal to our malicious direction
-        
-        # Avoid division by zero
+        if best_neighbor is None:
+            return v_malicious
+
+        # Step 3: 正交分解
         dot_product = torch.dot(v_malicious, v_malicious)
         if dot_product == 0:
             return v_malicious
-            
-        # Projection of best_neighbor onto v_malicious (the parallel component)
+
         proj_v_malicious = (torch.dot(best_neighbor, v_malicious) / dot_product) * v_malicious
-        
-        # The orthogonal component - this is our "benign noise" that won't interfere with attack direction
         v_orthogonal = best_neighbor - proj_v_malicious
 
-        # Step 4: Construct the final update by adding scaled orthogonal noise
+        # Step 4: 构建最终更新
         camouflaged_update = v_malicious + self.beta * v_orthogonal
 
-        # --- Logging for analysis ---
+        # 日志记录
         original_norm = torch.norm(poisoned_update).item()
-        amplified_norm = torch.norm(v_malicious).item()
         final_norm = torch.norm(camouflaged_update).item()
-        
+
         benign_mean = torch.stack(self.benign_updates).mean(dim=0)
         final_sim_with_mean = torch.cosine_similarity(
-            camouflaged_update.unsqueeze(0), 
+            camouflaged_update.unsqueeze(0),
             benign_mean.unsqueeze(0)
         ).item()
-        
-        # Calculate how much of the original direction is preserved
+
         direction_preservation = torch.cosine_similarity(
             v_malicious.unsqueeze(0),
             camouflaged_update.unsqueeze(0)
         ).item()
-        
-        print(f"    Original norm: {original_norm:.4f} -> Amplified: {amplified_norm:.4f} -> Final: {final_norm:.4f}")
-        print(f"    Direction preservation: {direction_preservation:.4f}")
-        print(f"    Final similarity with benign mean: {final_sim_with_mean:.4f}")
+
+        print(f"    规范: {original_norm:.4f} -> {final_norm:.4f}")
+        print(f"    方向保持: {direction_preservation:.4f}")
+        print(f"    最终相似度: {final_sim_with_mean:.4f}")
 
         return camouflaged_update
 
     def _construct_graph(self, updates: List[torch.Tensor]) -> tuple:
-        """Construct adjacency matrix and feature matrix from updates"""
+        """构建图结构"""
         n_updates = len(updates)
         max_features = 5000
 
@@ -296,7 +295,7 @@ class AttackerClient(Client):
         return adj_matrix, feature_matrix
 
     def _train_vgae(self, adj_matrix: torch.Tensor, feature_matrix: torch.Tensor, epochs=10):
-        """Train VGAE to learn benign update distribution"""
+        """训练VGAE"""
         if self.vgae is None:
             input_dim = feature_matrix.shape[1]
             self.vgae = VGAE(input_dim, hidden_dim=128, latent_dim=64).to(self.device)
