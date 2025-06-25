@@ -1,5 +1,5 @@
 """
-GRMP Attack Visualization and Analysis Tool - Fixed Version
+GRMP Attack Visualization and Analysis Tool - Enhanced Font Size Version
 
 Usage:
     python visualizer.py
@@ -14,15 +14,30 @@ import numpy as np
 import seaborn as sns
 from pathlib import Path
 from matplotlib.colors import LinearSegmentedColormap
-# 在 visualizer.py 开头的导入部分添加
 from matplotlib.backends.backend_pdf import PdfPages
 import matplotlib.pyplot as plt
+import datetime
 
-# 设置matplotlib参数以支持高质量输出
+# 设置matplotlib参数以支持高质量输出和更大的字体
 plt.rcParams['pdf.fonttype'] = 42  # 使用TrueType字体
-plt.rcParams['ps.fonttype'] = 42   # PostScript也使用TrueType
+plt.rcParams['ps.fonttype'] = 42  # PostScript也使用TrueType
 plt.rcParams['font.family'] = 'sans-serif'
 plt.rcParams['font.sans-serif'] = ['Arial', 'DejaVu Sans']
+
+# 设置Times New Roman字体
+plt.rcParams['font.family'] = 'serif'
+plt.rcParams['font.serif'] = ['Times New Roman', 'DejaVu Serif', 'Times']
+plt.rcParams['mathtext.fontset'] = 'stix'  # 使用STIX字体用于数学符号，与Times New Roman兼容
+
+# 全局字体大小设置 - 增大所有字体
+plt.rcParams['font.size'] = 14  # 默认字体大小从10增加到14
+plt.rcParams['axes.titlesize'] = 22  # 标题字体从14增加到20
+plt.rcParams['axes.labelsize'] = 18  # 轴标签从12增加到16
+plt.rcParams['xtick.labelsize'] = 16  # x轴刻度标签从10增加到14
+plt.rcParams['ytick.labelsize'] = 16  # y轴刻度标签从10增加到14
+plt.rcParams['legend.fontsize'] = 16  # 图例字体从10增加到14
+plt.rcParams['figure.titlesize'] = 24  # 图表总标题从16增加到24
+
 # 设置绘图风格
 plt.style.use('seaborn-v0_8-darkgrid')
 sns.set_palette("husl")
@@ -56,11 +71,11 @@ class GRMPAnalyzer:
         print(f"良性客户端: {self.benign_ids}")
 
     def plot_comprehensive_analysis(self):
-        """创建综合分析图表"""
-        fig = plt.figure(figsize=(20, 16))
+        """创建综合分析图表 - 增大字体版本"""
+        fig = plt.figure(figsize=(24, 20))  # 增大图表尺寸以适应更大的字体
 
         # 创建子图布局
-        gs = fig.add_gridspec(4, 3, hspace=0.3, wspace=0.3)
+        gs = fig.add_gridspec(4, 3, hspace=0.35, wspace=0.35)  # 增加间距
 
         # 1. ASR波动分析（主图）
         ax1 = fig.add_subplot(gs[0, :2])
@@ -94,13 +109,13 @@ class GRMPAnalyzer:
                      f'Config: {self.config["num_clients"]} clients, ' +
                      f'{self.config["num_attackers"]} attackers, ' +
                      f'{self.config["num_rounds"]} rounds',
-                     fontsize=16, fontweight='bold')
+                     fontsize=28, fontweight='bold')  # 主标题字体从16增加到28
 
         plt.savefig(self.output_dir / 'comprehensive_analysis.png', dpi=300, bbox_inches='tight')
         plt.close()
 
     def plot_core_paper_figures(self):
-        """生成论文核心图表（两张最重要的图）- 支持PDF输出"""
+        """生成论文核心图表（两张最重要的图）- 支持PDF输出和更大字体"""
         print("\n生成论文核心图表...")
 
         # 创建PDF文件
@@ -108,7 +123,7 @@ class GRMPAnalyzer:
 
         with PdfPages(pdf_path) as pdf:
             # 图1: 攻击性能随时间变化
-            fig1, ax1 = plt.subplots(figsize=(10, 6))
+            fig1, ax1 = plt.subplots(figsize=(8, 6))  # 增大图表尺寸
             self.plot_attack_performance_over_time(ax1)
             plt.tight_layout()
 
@@ -123,7 +138,7 @@ class GRMPAnalyzer:
             plt.close(fig1)
 
             # 图2: 相似度分布对比
-            fig2, ax2 = plt.subplots(figsize=(10, 6))
+            fig2, ax2 = plt.subplots(figsize=(8, 6))  # 增大图表尺寸
             self.plot_similarity_distribution_comparison(ax2)
             plt.tight_layout()
 
@@ -143,7 +158,7 @@ class GRMPAnalyzer:
             d['Author'] = 'Your Name'
             d['Subject'] = 'Federated Learning Security Analysis'
             d['Keywords'] = 'GRMP, Federated Learning, Model Poisoning'
-            d['CreationDate'] = plt.datetime.datetime.now()
+            d['CreationDate'] = datetime.datetime.now()
 
         print(f"\nPDF文件已生成: {pdf_path}")
         print("高质量图像已生成:")
@@ -151,9 +166,9 @@ class GRMPAnalyzer:
         print(f"  - {self.output_dir}/figure1_attack_performance.pdf")
         print(f"  - {self.output_dir}/figure2_similarity_distribution.png (300 DPI)")
         print(f"  - {self.output_dir}/figure2_similarity_distribution.pdf")
-        
+
     def plot_attack_performance_over_time(self, ax):
-        """核心图1: 攻击性能随时间变化（论文版）"""
+        """核心图1: 攻击性能随时间变化（论文版）- 增大字体"""
         rounds = self.metrics['rounds']
         asr = self.metrics['attack_asr']
         clean_acc = self.metrics['clean_acc']
@@ -162,27 +177,27 @@ class GRMPAnalyzer:
         ax2 = ax.twinx()
 
         # 绘制ASR（左轴）
-        line1 = ax.plot(rounds, asr, 'r-o', linewidth=3, markersize=10,
-                       label='Attack Success Rate (ASR)', markerfacecolor='white',
-                       markeredgewidth=2, markeredgecolor='red')
-        ax.set_ylabel('Attack Success Rate', fontsize=14, color='red')
-        ax.tick_params(axis='y', labelcolor='red')
+        line1 = ax.plot(rounds, asr, 'r-o', linewidth=4, markersize=14,  # 增大线宽和标记
+                        label='Attack Success Rate (ASR)', markerfacecolor='white',
+                        markeredgewidth=3, markeredgecolor='red')
+        ax.set_ylabel('Attack Success Rate', fontsize=18, color='red')  # 字体从14增加到18
+        ax.tick_params(axis='y', labelcolor='red', labelsize=16)  # 刻度标签增大
 
         # 绘制Clean Accuracy（右轴）
-        line2 = ax2.plot(rounds, clean_acc, 'b-s', linewidth=3, markersize=10,
-                        label='Clean Accuracy', markerfacecolor='white',
-                        markeredgewidth=2, markeredgecolor='blue')
-        ax2.set_ylabel('Clean Accuracy', fontsize=14, color='blue')
-        ax2.tick_params(axis='y', labelcolor='blue')
+        line2 = ax2.plot(rounds, clean_acc, 'b-s', linewidth=4, markersize=14,  # 增大线宽和标记
+                         label='Clean Accuracy', markerfacecolor='white',
+                         markeredgewidth=3, markeredgecolor='blue')
+        ax2.set_ylabel('Clean Accuracy', fontsize=18, color='blue')  # 字体从14增加到18
+        ax2.tick_params(axis='y', labelcolor='blue', labelsize=16)  # 刻度标签增大
 
         # 标注关键点
-        max_asr_idx = asr.index(max(asr))
-        ax.annotate(f'Peak: {max(asr):.1%}',
-                   xy=(rounds[max_asr_idx], asr[max_asr_idx]),
-                   xytext=(rounds[max_asr_idx]+0.5, asr[max_asr_idx]+0.05),
-                   fontsize=12, fontweight='bold',
-                   bbox=dict(boxstyle='round,pad=0.3', facecolor='yellow', alpha=0.7),
-                   arrowprops=dict(arrowstyle='->', connectionstyle='arc3,rad=0.2'))
+        # max_asr_idx = asr.index(max(asr))
+        # ax.annotate(f'Peak: {max(asr):.1%}',
+        #            xy=(rounds[max_asr_idx], asr[max_asr_idx]),
+        #            xytext=(rounds[max_asr_idx]+0.5, asr[max_asr_idx]+0.05),
+        #            fontsize=16, fontweight='bold',  # 字体从12增加到16
+        #            bbox=dict(boxstyle='round,pad=0.5', facecolor='yellow', alpha=0.7),
+        #            arrowprops=dict(arrowstyle='->', connectionstyle='arc3,rad=0.2', lw=2))
 
         # 添加攻击阶段标注
         ax.axvspan(0, 5, alpha=0.1, color='green', label='Trust Building')
@@ -191,22 +206,25 @@ class GRMPAnalyzer:
             ax.axvspan(10, max(rounds), alpha=0.1, color='red', label='Full Attack')
 
         # 设置标签和标题
-        ax.set_xlabel('Training Round', fontsize=14)
-        ax.set_title('GRMP Attack Performance Over Time', fontsize=16, fontweight='bold')
+        ax.set_xlabel('Training Round', fontsize=18)  # 字体从14增加到18
+        ax.set_title('GRMP Attack Performance Over Time', fontsize=22, fontweight='bold')  # 字体从16增加到22
 
         # 合并图例
         lines = line1 + line2
         labels = [l.get_label() for l in lines]
-        ax.legend(lines, labels, loc='center right', fontsize=12)
+        ax.legend(lines, labels, loc='upper left', fontsize=16)  # 图例字体从12增加到16
 
         # 设置网格
-        ax.grid(True, alpha=0.3)
+        ax.grid(True, alpha=0.3, linewidth=1.5)
         ax.set_xlim(0.5, max(rounds) + 0.5)
         ax.set_ylim(-0.05, max(asr) * 1.2)
         ax2.set_ylim(min(clean_acc) * 0.95, 1.0)
 
+        # 增大刻度标签
+        ax.tick_params(axis='x', labelsize=16)
+
     def plot_similarity_distribution_comparison(self, ax):
-        """核心图2: 相似度分布对比（论文版）"""
+        """核心图2: 相似度分布对比（论文版）- 增大字体"""
         # 收集所有轮次的相似度数据
         all_benign_sims = []
         all_attacker_sims = []
@@ -229,27 +247,27 @@ class GRMPAnalyzer:
 
         # 良性客户端分布
         n_benign, _, _ = ax.hist(all_benign_sims, bins=bins, alpha=0.6,
-                                color='royalblue', label='Benign Clients',
-                                edgecolor='black', linewidth=1.5)
+                                 color='royalblue', label='Benign Clients',
+                                 edgecolor='black', linewidth=2)  # 增加边框线宽
 
         # 攻击者分布
         n_attacker, _, _ = ax.hist(all_attacker_sims, bins=bins, alpha=0.6,
-                                  color='crimson', label='Attackers',
-                                  edgecolor='black', linewidth=1.5)
+                                   color='crimson', label='Attackers',
+                                   edgecolor='black', linewidth=2)  # 增加边框线宽
 
         # 添加平均阈值线
         avg_threshold = np.mean(all_thresholds)
-        ax.axvline(x=avg_threshold, color='darkgreen', linestyle='--', linewidth=3,
-                  label=f'Avg Defense Threshold: {avg_threshold:.3f}')
+        ax.axvline(x=avg_threshold, color='darkgreen', linestyle='--', linewidth=4,  # 线宽从3增加到4
+                   label=f'Avg Defense Threshold: {avg_threshold:.3f}')
 
         # 添加均值线
         benign_mean = np.mean(all_benign_sims)
         attacker_mean = np.mean(all_attacker_sims)
 
-        ax.axvline(x=benign_mean, color='blue', linestyle=':', linewidth=2,
-                  label=f'Benign Mean: {benign_mean:.3f}')
-        ax.axvline(x=attacker_mean, color='red', linestyle=':', linewidth=2,
-                  label=f'Attacker Mean: {attacker_mean:.3f}')
+        ax.axvline(x=benign_mean, color='blue', linestyle=':', linewidth=3,  # 线宽从2增加到3
+                   label=f'Benign Mean: {benign_mean:.3f}')
+        ax.axvline(x=attacker_mean, color='red', linestyle=':', linewidth=3,  # 线宽从2增加到3
+                   label=f'Attacker Mean: {attacker_mean:.3f}')
 
         # 计算并显示关键统计
         benign_below_threshold = sum(1 for s in all_benign_sims if s < avg_threshold)
@@ -258,31 +276,34 @@ class GRMPAnalyzer:
         benign_rejection_rate = benign_below_threshold / len(all_benign_sims) * 100
         attacker_acceptance_rate = attacker_above_threshold / len(all_attacker_sims) * 100
 
-        # 添加文本框显示统计信息
-        textstr = f'Benign Rejection Rate: {benign_rejection_rate:.1f}%\n' + \
-                  f'Attacker Acceptance Rate: {attacker_acceptance_rate:.1f}%'
-        props = dict(boxstyle='round', facecolor='wheat', alpha=0.8)
-        ax.text(0.02, 0.95, textstr, transform=ax.transAxes, fontsize=12,
-                verticalalignment='top', bbox=props)
+        # # 添加文本框显示统计信息
+        # textstr = f'Benign Rejection Rate: {benign_rejection_rate:.1f}%\n' + \
+        #           f'Attacker Acceptance Rate: {attacker_acceptance_rate:.1f}%'
+        # props = dict(boxstyle='round', facecolor='wheat', alpha=0.8)
+        # ax.text(0.02, 0.95, textstr, transform=ax.transAxes, fontsize=16,  # 字体从12增加到16
+        #         verticalalignment='top', bbox=props)
 
         # 设置标签和标题
-        ax.set_xlabel('Cosine Similarity', fontsize=14)
-        ax.set_ylabel('Frequency', fontsize=14)
+        ax.set_xlabel('Cosine Similarity', fontsize=18)  # 字体从14增加到18
+        ax.set_ylabel('Frequency', fontsize=18)  # 字体从14增加到18
         ax.set_title('Similarity Distribution: Benign Clients vs Attackers',
-                    fontsize=16, fontweight='bold')
-        ax.legend(loc='upper right', fontsize=11)
-        ax.grid(True, alpha=0.3, axis='y')
+                     fontsize=22, fontweight='bold')  # 字体从16增加到22
+        ax.legend(loc='upper left', fontsize=15)  # 图例字体从11增加到15
+        ax.grid(True, alpha=0.3, axis='y', linewidth=1.5)
 
         # 设置X轴范围
         ax.set_xlim(0.2, 0.8)
 
+        # 增大刻度标签
+        ax.tick_params(axis='both', labelsize=16)
+
     def plot_asr_volatility(self, ax):
-        """分析ASR波动的原因"""
+        """分析ASR波动的原因 - 增大字体"""
         rounds = self.metrics['rounds']
         asr = self.metrics['attack_asr']
 
         # 绘制ASR曲线
-        ax.plot(rounds, asr, 'r-o', linewidth=3, markersize=10, label='ASR')
+        ax.plot(rounds, asr, 'r-o', linewidth=4, markersize=12, label='ASR')  # 增大线宽和标记
 
         # 标注关键转折点
         for i in range(1, len(rounds)):
@@ -292,15 +313,16 @@ class GRMPAnalyzer:
                             xy=(rounds[i], asr[i]),
                             xytext=(10, 20 if change > 0 else -20),
                             textcoords='offset points',
-                            bbox=dict(boxstyle='round,pad=0.3',
+                            fontsize=14,  # 增大注释字体
+                            bbox=dict(boxstyle='round,pad=0.5',
                                       facecolor='yellow' if change > 0 else 'orange',
                                       alpha=0.7),
                             arrowprops=dict(arrowstyle='->',
-                                            connectionstyle='arc3,rad=0.3'))
+                                            connectionstyle='arc3,rad=0.3', lw=2))
 
         # 添加阶段标注
-        ax.axhline(y=0.1, color='gray', linestyle='--', alpha=0.5, label='10% threshold')
-        ax.axhline(y=0.2, color='gray', linestyle='--', alpha=0.5, label='20% threshold')
+        ax.axhline(y=0.1, color='gray', linestyle='--', alpha=0.5, linewidth=2, label='10% threshold')
+        ax.axhline(y=0.2, color='gray', linestyle='--', alpha=0.5, linewidth=2, label='20% threshold')
 
         # 分析每轮的接受情况
         for i, round_data in enumerate(self.results):
@@ -321,18 +343,18 @@ class GRMPAnalyzer:
             # 标注轮次信息
             info_text = f"A:{attackers_accepted}/{len(self.attacker_ids)}"
             ax.text(rounds[i], bar_y + bar_height / 2, info_text,
-                    ha='center', va='center', fontsize=8)
+                    ha='center', va='center', fontsize=12)  # 增大字体
 
-        ax.set_xlabel('Round', fontsize=12)
-        ax.set_ylabel('Attack Success Rate (ASR)', fontsize=12)
+        ax.set_xlabel('Round', fontsize=16)
+        ax.set_ylabel('Attack Success Rate (ASR)', fontsize=16)
         ax.set_title('ASR Volatility Analysis\n(Bottom bars show attacker acceptance rate)',
-                     fontsize=14, fontweight='bold')
-        ax.legend(loc='upper right')
-        ax.grid(True, alpha=0.3)
+                     fontsize=18, fontweight='bold')
+        ax.legend(loc='upper right', fontsize=14)
+        ax.grid(True, alpha=0.3, linewidth=1.5)
         ax.set_ylim(-0.15, max(asr) * 1.2)
 
     def plot_client_acceptance_pattern(self, ax):
-        """可视化客户端接受/拒绝模式"""
+        """可视化客户端接受/拒绝模式 - 增大字体"""
         rounds = self.metrics['rounds']
         num_clients = self.config['num_clients']
 
@@ -360,7 +382,7 @@ class GRMPAnalyzer:
 
         # 设置标签
         ax.set_xticks(range(len(rounds)))
-        ax.set_xticklabels([f'R{r}' for r in rounds])
+        ax.set_xticklabels([f'R{r}' for r in rounds], fontsize=12)
         ax.set_yticks(range(num_clients))
 
         # 标记攻击者
@@ -370,24 +392,24 @@ class GRMPAnalyzer:
                 ylabels.append(f'C{i} (A)')
             else:
                 ylabels.append(f'C{i}')
-        ax.set_yticklabels(ylabels)
+        ax.set_yticklabels(ylabels, fontsize=12)
 
         # 添加分割线
         for attacker_id in self.attacker_ids:
-            ax.axhline(y=attacker_id - 0.5, color='red', linewidth=2, linestyle='--')
+            ax.axhline(y=attacker_id - 0.5, color='red', linewidth=3, linestyle='--')
 
-        ax.set_xlabel('Round')
-        ax.set_ylabel('Client ID')
-        ax.set_title('Client Acceptance Pattern\n(Green=Accepted, Red=Rejected)')
+        ax.set_xlabel('Round', fontsize=16)
+        ax.set_ylabel('Client ID', fontsize=16)
+        ax.set_title('Client Acceptance Pattern\n(Green=Accepted, Red=Rejected)', fontsize=18)
 
         # 添加统计信息
         for i in range(num_clients):
             accept_rate = np.sum(acceptance_matrix[i] == 1) / len(rounds)
             ax.text(len(rounds), i, f'{accept_rate:.0%}',
-                    ha='left', va='center', fontsize=9)
+                    ha='left', va='center', fontsize=12)
 
     def plot_similarity_evolution(self, ax):
-        """绘制相似度演变图"""
+        """绘制相似度演变图 - 增大字体"""
         rounds = self.metrics['rounds']
 
         # 收集所有相似度数据
@@ -429,22 +451,22 @@ class GRMPAnalyzer:
             patch.set_facecolor('lightcoral')
 
         # 绘制阈值线
-        ax.plot(rounds, thresholds, 'g--', linewidth=2, label='Defense Threshold')
+        ax.plot(rounds, thresholds, 'g--', linewidth=3, label='Defense Threshold')
 
         # 添加均值线
         benign_means = [np.mean(sims) for sims in benign_sims]
         attacker_means = [np.mean(sims) for sims in attacker_sims]
-        ax.plot(rounds, benign_means, 'b-', alpha=0.5, label='Benign Mean')
-        ax.plot(rounds, attacker_means, 'r-', alpha=0.5, label='Attacker Mean')
+        ax.plot(rounds, benign_means, 'b-', alpha=0.5, linewidth=2, label='Benign Mean')
+        ax.plot(rounds, attacker_means, 'r-', alpha=0.5, linewidth=2, label='Attacker Mean')
 
-        ax.set_xlabel('Round')
-        ax.set_ylabel('Cosine Similarity')
-        ax.set_title('Similarity Distribution Evolution')
-        ax.legend(loc='best')
-        ax.grid(True, alpha=0.3)
+        ax.set_xlabel('Round', fontsize=16)
+        ax.set_ylabel('Cosine Similarity', fontsize=16)
+        ax.set_title('Similarity Distribution Evolution', fontsize=18, fontweight='bold')
+        ax.legend(loc='best', fontsize=14)
+        ax.grid(True, alpha=0.3, linewidth=1.5)
 
     def plot_defense_threshold_analysis(self, ax):
-        """分析防御阈值的动态变化"""
+        """分析防御阈值的动态变化 - 增大字体"""
         rounds = self.metrics['rounds']
 
         thresholds = []
@@ -458,8 +480,8 @@ class GRMPAnalyzer:
             std_sims.append(defense['std_similarity'])
 
         # 绘制阈值和统计量
-        ax.plot(rounds, thresholds, 'g-o', linewidth=2, label='Threshold')
-        ax.plot(rounds, mean_sims, 'b-s', linewidth=2, label='Mean Similarity')
+        ax.plot(rounds, thresholds, 'g-o', linewidth=3, markersize=10, label='Threshold')
+        ax.plot(rounds, mean_sims, 'b-s', linewidth=3, markersize=10, label='Mean Similarity')
 
         # 添加标准差范围
         upper = np.array(mean_sims) + np.array(std_sims)
@@ -467,51 +489,53 @@ class GRMPAnalyzer:
         ax.fill_between(rounds, lower, upper, alpha=0.2, color='blue',
                         label='±1 Std Dev')
 
-        ax.set_xlabel('Round')
-        ax.set_ylabel('Similarity Value')
-        ax.set_title('Defense Threshold Dynamics')
-        ax.legend()
-        ax.grid(True, alpha=0.3)
+        ax.set_xlabel('Round', fontsize=16)
+        ax.set_ylabel('Similarity Value', fontsize=16)
+        ax.set_title('Defense Threshold Dynamics', fontsize=18, fontweight='bold')
+        ax.legend(fontsize=14)
+        ax.grid(True, alpha=0.3, linewidth=1.5)
 
     def plot_attack_phase_diagram(self, ax):
-        """绘制攻击效果相位图"""
+        """绘制攻击效果相位图 - 增大字体"""
         clean_acc = self.metrics['clean_acc']
         asr = self.metrics['attack_asr']
         rounds = self.metrics['rounds']
 
         # 创建相位图
         scatter = ax.scatter(clean_acc, asr, c=rounds, cmap='viridis',
-                             s=200, edgecolors='black', linewidth=2)
+                             s=300, edgecolors='black', linewidth=3)  # 增大点的大小和边框
 
         # 添加轨迹
         for i in range(len(rounds) - 1):
             ax.arrow(clean_acc[i], asr[i],
                      clean_acc[i + 1] - clean_acc[i],
                      asr[i + 1] - asr[i],
-                     head_width=0.005, head_length=0.01,
-                     fc='gray', ec='gray', alpha=0.5)
+                     head_width=0.008, head_length=0.015,
+                     fc='gray', ec='gray', alpha=0.5, linewidth=2)
 
         # 标注轮次
         for i, r in enumerate(rounds):
             ax.annotate(f'R{r}', (clean_acc[i], asr[i]),
                         xytext=(5, 5), textcoords='offset points',
-                        fontsize=8)
+                        fontsize=12)
 
         # 添加理想区域
         ax.axvspan(0.85, 0.95, alpha=0.1, color='green', label='Ideal Clean Acc')
         ax.axhspan(0.5, 1.0, alpha=0.1, color='red', label='High ASR')
 
-        ax.set_xlabel('Clean Accuracy')
-        ax.set_ylabel('Attack Success Rate')
-        ax.set_title('Attack-Defense Phase Diagram')
-        ax.legend()
-        ax.grid(True, alpha=0.3)
+        ax.set_xlabel('Clean Accuracy', fontsize=16)
+        ax.set_ylabel('Attack Success Rate', fontsize=16)
+        ax.set_title('Attack-Defense Phase Diagram', fontsize=18, fontweight='bold')
+        ax.legend(fontsize=14)
+        ax.grid(True, alpha=0.3, linewidth=1.5)
 
         # 修复：使用plt.colorbar代替fig.colorbar
         cbar = plt.colorbar(scatter, ax=ax, label='Round')
+        cbar.ax.tick_params(labelsize=12)
+        cbar.set_label('Round', fontsize=14)
 
     def plot_asr_contribution_analysis(self, ax):
-        """分析ASR波动的贡献因素"""
+        """分析ASR波动的贡献因素 - 增大字体"""
         rounds = self.metrics['rounds']
         asr = self.metrics['attack_asr']
 
@@ -553,16 +577,16 @@ class GRMPAnalyzer:
             bottom += normalized_values
 
         # 添加实际ASR线
-        ax.plot(rounds, asr, 'k-o', linewidth=2, markersize=8, label='Actual ASR')
+        ax.plot(rounds, asr, 'k-o', linewidth=3, markersize=10, label='Actual ASR')
 
-        ax.set_xlabel('Round')
-        ax.set_ylabel('ASR Contribution')
-        ax.set_title('ASR Contributing Factors Analysis')
-        ax.legend()
-        ax.grid(True, alpha=0.3)
+        ax.set_xlabel('Round', fontsize=16)
+        ax.set_ylabel('ASR Contribution', fontsize=16)
+        ax.set_title('ASR Contributing Factors Analysis', fontsize=18, fontweight='bold')
+        ax.legend(fontsize=14)
+        ax.grid(True, alpha=0.3, linewidth=1.5)
 
     def plot_system_health_metrics(self, ax):
-        """绘制系统健康度指标"""
+        """绘制系统健康度指标 - 增大字体"""
         rounds = self.metrics['rounds']
 
         # 计算各项指标
@@ -600,16 +624,16 @@ class GRMPAnalyzer:
         x = np.array(rounds)
 
         for metric, values in metrics.items():
-            ax.plot(x, values, '-o', linewidth=2, markersize=6, label=metric)
+            ax.plot(x, values, '-o', linewidth=3, markersize=10, label=metric)
 
         ax.fill_between(x, 0.3, 0.7, alpha=0.1, color='green', label='Healthy Range')
-        ax.axhline(y=0.5, color='gray', linestyle='--', alpha=0.5)
+        ax.axhline(y=0.5, color='gray', linestyle='--', alpha=0.5, linewidth=2)
 
-        ax.set_xlabel('Round')
-        ax.set_ylabel('Metric Value (0-1)')
-        ax.set_title('System Health Metrics Over Time')
-        ax.legend(loc='center left', bbox_to_anchor=(1, 0.5))
-        ax.grid(True, alpha=0.3)
+        ax.set_xlabel('Round', fontsize=16)
+        ax.set_ylabel('Metric Value (0-1)', fontsize=16)
+        ax.set_title('System Health Metrics Over Time', fontsize=18, fontweight='bold')
+        ax.legend(loc='center left', bbox_to_anchor=(1, 0.5), fontsize=14)
+        ax.grid(True, alpha=0.3, linewidth=1.5)
         ax.set_ylim(0, 1.1)
 
     def generate_summary_report(self):
@@ -692,6 +716,7 @@ def main():
         print(f"  - {analyzer.output_dir}/comprehensive_analysis.png")
         print(f"  - {analyzer.output_dir}/figure1_attack_performance.png (论文图1)")
         print(f"  - {analyzer.output_dir}/figure2_similarity_distribution.png (论文图2)")
+        print(f"  - {analyzer.output_dir}/GRMP_Attack_Results.pdf (PDF版本)")
         print(f"  - {analyzer.output_dir}/analysis_report.txt")
 
     except Exception as e:
