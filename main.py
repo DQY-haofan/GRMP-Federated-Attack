@@ -382,15 +382,15 @@ def main():
 
         'num_attackers': 2,  # 25% attackers
 
-        'num_rounds': 10,  # More rounds for progressive attack
+        'num_rounds': 5,  # More rounds for progressive attack
 
-        'client_lr': 1e-4,
+        'client_lr': 1e-5,
 
         'poison_rate': 1.5,  # Base rate (will be adjusted progressively)
 
-        'defense_threshold': 0.4,
+        'defense_threshold': 0.25,
 
-        'local_epochs': 2,
+        'local_epochs': 4,
 
         'base_amplification_factor': 3.0,
 
