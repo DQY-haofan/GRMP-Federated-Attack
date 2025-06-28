@@ -251,10 +251,6 @@ class AttackerClient(Client):
 
         # Step 4: 构建最终更新
         camouflaged_update = v_malicious + self.beta * v_orthogonal
-        # 新增：添加随机噪声让攻击者不那么"完美"
-        noise_factor = 0.1  # 噪声强度
-        noise = torch.randn_like(camouflaged_update) * noise_factor
-        camouflaged_update = camouflaged_update + noise
 
         # 日志记录
         original_norm = torch.norm(poisoned_update).item()
