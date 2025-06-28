@@ -386,7 +386,7 @@ def main():
 
         'client_lr': 1e-4,
 
-        'poison_rate': 2,  # Base rate (will be adjusted progressively)
+        'poison_rate': 1.5,  # Base rate (will be adjusted progressively)
 
         'defense_threshold': 0.4,
 
