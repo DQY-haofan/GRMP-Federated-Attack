@@ -12,7 +12,7 @@ class Server:
     """联邦学习服务器 - 增强稳定性版本"""
 
     def __init__(self, global_model: nn.Module, test_loader, attack_test_loader,
-                 defense_threshold=0.5, total_rounds=20, server_lr=0.8, tolerance_factor=1.5):
+                 defense_threshold=0.4, total_rounds=20, server_lr=0.8, tolerance_factor=2):
         self.global_model = copy.deepcopy(global_model)
         self.test_loader = test_loader
         self.attack_test_loader = attack_test_loader
