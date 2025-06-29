@@ -241,14 +241,14 @@ class DataManager:
         client_labels = [self.train_labels[i] for i in indices]
 
         # Calculate effective poison rate based on round
-        if round_num < 5:
-            effective_rate = self.base_poison_rate * 0.6  # 30% of base rate
-        elif round_num < 10:
-            effective_rate = self.base_poison_rate * 0.7  # 60% of base rate
-        elif round_num < 15:
-            effective_rate = self.base_poison_rate * 0.8  # 80% of base rate
+        if round_num < 3:
+            effective_rate = self.base_poison_rate * 0.4  # 30% of base rate
+        elif round_num < 5:
+            effective_rate = self.base_poison_rate * 0.5  # 60% of base rate
+        elif round_num < 8:
+            effective_rate = self.base_poison_rate * 0.6  # 80% of base rate
         else:
-            effective_rate = self.base_poison_rate * 0.8  # Up to 120% of base rate
+            effective_rate = self.base_poison_rate * 0.7  # Up to 120% of base rate
 
         # Print round-specific info
         client_dist = np.bincount([l for l in client_labels], minlength=4)

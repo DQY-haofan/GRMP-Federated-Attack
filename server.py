@@ -185,11 +185,11 @@ class Server:
         current_asr = self.history['asr'][-1]
 
         # 如果ASR波动过大，调整服务器学习率
-        if abs(asr_change) > 0.60:  # 波动超过15%
+        if abs(asr_change) > 0.40:  # 波动超过15%
             self.server_lr = max(0.5, self.server_lr * 0.9)  # 降低学习率
             print(f"  🔄 检测到大幅波动，降低服务器学习率至: {self.server_lr:.2f}")
         elif abs(asr_change) < 0.05 and round_num > 5:  # 稳定后可以加速
-            self.server_lr = min(0.95, self.server_lr * 1.2)
+            self.server_lr = min(0.95, self.server_lr * 1.1)
             print(f"  🔄 系统稳定，提高服务器学习率至: {self.server_lr:.2f}")
 
     def run_round(self, round_num: int) -> Dict:

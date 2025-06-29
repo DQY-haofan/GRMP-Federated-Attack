@@ -204,94 +204,142 @@ class AttackerClient(Client):
         return poisoned_update
 
     def camouflage_update(self, poisoned_update: torch.Tensor) -> torch.Tensor:
-        """伪装更新 - 温和稳定版本"""
+        """伪装更新 - 平衡版本（让攻击者相似度更接近良性用户）"""
         if not self.benign_updates:
             print(f"    Attacker {self.client_id}: 无良性更新可用")
             return poisoned_update
-        # 计算良性更新的统计特性
-        benign_mean = torch.stack(self.benign_updates).mean(dim=0)
-        benign_std = torch.stack(self.benign_updates).std(dim=0).mean().item()
-        
-        # 计算当前与良性均值的相似度
-        current_sim = torch.cosine_similarity(
-            poisoned_update.unsqueeze(0),
-            benign_mean.unsqueeze(0)
-        ).item()
 
-        # 渐进式放大因子（更温和）
+        # 计算良性更新的统计特性
+        benign_tensor = torch.stack(self.benign_updates)
+        benign_mean = benign_tensor.mean(dim=0)
+        benign_std = benign_tensor.std(dim=0)
+        
+        # 计算良性用户之间的相似度分布
+        benign_similarities = []
+        for i, update in enumerate(self.benign_updates):
+            sim = torch.cosine_similarity(update.unsqueeze(0), benign_mean.unsqueeze(0)).item()
+            benign_similarities.append(sim)
+        
+        benign_sim_mean = np.mean(benign_similarities)
+        benign_sim_std = np.std(benign_similarities)
+        
+        print(f"    良性用户相似度: {benign_sim_mean:.3f} ± {benign_sim_std:.3f}")
+
+        # 渐进式放大因子（保留原有逻辑但调整范围）
         if self.progressive_enabled:
-            if self.current_round < 3:
+            if self.current_round < 5:
+                amplification_factor = self.base_amplification * 0.4  # 更低起点
+                self.beta = 0.3
+                target_similarity = benign_sim_mean + benign_sim_std  # 稍高于平均
+            elif self.current_round < 10:
+                amplification_factor = self.base_amplification * 0.6
+                self.beta = 0.4
+                target_similarity = benign_sim_mean + 0.5 * benign_sim_std
+            elif self.current_round < 15:
                 amplification_factor = self.base_amplification * 0.8
-                self.beta = 0.5  # 降低from 0.6
-            elif self.current_round < 5:
-                amplification_factor = self.base_amplification * 0.9
-                self.beta = 0.5  # 降低from 0.7
-            elif self.current_round < 8:
-                amplification_factor = self.base_amplification * 0.9
-                self.beta = 0.5  # 降低from 0.8
+                self.beta = 0.5
+                target_similarity = benign_sim_mean
             else:
-                amplification_factor = self.base_amplification * 0.9
-                self.beta = 0.5  # 降低from 0.9
+                amplification_factor = self.base_amplification * 1.0
+                self.beta = 0.6
+                target_similarity = benign_sim_mean - 0.5 * benign_sim_std  # 可以稍低
         else:
             amplification_factor = self.base_amplification
+            target_similarity = benign_sim_mean
 
-        # 添加随机波动来模拟IID特性
-        random_factor = self.get_iid_random_factor()
-        amplification_factor = amplification_factor * random_factor
-      
-
-        # 平滑放大因子变化
+        # 平滑放大因子变化（保留原有的平滑机制）
         if self.prev_amplification is not None:
             amplification_factor = 0.7 * self.prev_amplification + 0.3 * amplification_factor
         self.prev_amplification = amplification_factor
 
-        print(f"    Attacker {self.client_id} - Round {self.current_round}: "
-              f"温和GRMP (amp={amplification_factor:.1f}, beta={self.beta:.1f})")
-
         # Step 1: 放大毒药信号
         v_malicious = poisoned_update * amplification_factor
 
-        # Step 2: 找到最接近的良性邻居
+        # Step 2: 测试当前相似度
+        current_sim = torch.cosine_similarity(v_malicious.unsqueeze(0), benign_mean.unsqueeze(0)).item()
+        
+        # Step 3: 自适应调整以达到目标相似度
+        if current_sim > target_similarity + 0.15:  # 相似度过高
+            # 添加扰动降低相似度
+            noise_factor = (current_sim - target_similarity) / 2
+            noise = torch.randn_like(v_malicious) * benign_std * noise_factor
+            v_malicious = v_malicious + noise
+            print(f"    降低相似度: {current_sim:.3f} -> ", end='')
+            current_sim = torch.cosine_similarity(v_malicious.unsqueeze(0), benign_mean.unsqueeze(0)).item()
+            print(f"{current_sim:.3f}")
+        
+        # Step 4: 找到最接近的良性邻居（保留原有逻辑）
         best_neighbor = None
-        max_sim = -1
+        neighbor_sims = []
         for benign_update in self.benign_updates:
             sim = torch.cosine_similarity(v_malicious.unsqueeze(0), benign_update.unsqueeze(0)).item()
-            if sim > max_sim:
-                max_sim = sim
+            neighbor_sims.append(sim)
+            if best_neighbor is None or sim > max(neighbor_sims[:-1]):
                 best_neighbor = benign_update
 
         if best_neighbor is None:
             return v_malicious
 
-        # Step 3: 正交分解
+        # Step 5: 正交分解（保留原有逻辑）
         dot_product = torch.dot(v_malicious, v_malicious)
         if dot_product == 0:
             return v_malicious
 
         proj_v_malicious = (torch.dot(best_neighbor, v_malicious) / dot_product) * v_malicious
-        v_orthogonal = best_neighbor * 0.3 - proj_v_malicious
+        v_orthogonal = best_neighbor - proj_v_malicious
 
-        # Step 4: 构建最终更新
-        camouflaged_update = v_malicious + self.beta * v_orthogonal
+        # Step 6: 动态调整beta以控制最终相似度
+        # 先构建候选更新
+        candidate_update = v_malicious + self.beta * v_orthogonal
+        candidate_sim = torch.cosine_similarity(candidate_update.unsqueeze(0), benign_mean.unsqueeze(0)).item()
+        
+        # 如果候选相似度仍然过高，调整beta
+        if candidate_sim > target_similarity + 0.1:
+            # 二分搜索找到合适的beta
+            beta_low, beta_high = 0.0, self.beta
+            for _ in range(5):  # 最多5次迭代
+                beta_mid = (beta_low + beta_high) / 2
+                test_update = v_malicious + beta_mid * v_orthogonal
+                test_sim = torch.cosine_similarity(test_update.unsqueeze(0), benign_mean.unsqueeze(0)).item()
+                
+                if test_sim > target_similarity:
+                    beta_high = beta_mid
+                else:
+                    beta_low = beta_mid
+            
+            adjusted_beta = (beta_low + beta_high) / 2
+            camouflaged_update = v_malicious + adjusted_beta * v_orthogonal
+            print(f"    调整beta: {self.beta:.2f} -> {adjusted_beta:.2f}")
+        else:
+            camouflaged_update = candidate_update
+
+        # Step 7: 添加轻微的良性分布噪声（使其更像良性更新）
+        benign_noise = torch.randn_like(camouflaged_update) * benign_std * 0.05
+        camouflaged_update = camouflaged_update + benign_noise
 
         # 日志记录
         original_norm = torch.norm(poisoned_update).item()
         final_norm = torch.norm(camouflaged_update).item()
-
-        benign_mean = torch.stack(self.benign_updates).mean(dim=0)
+        
         final_sim_with_mean = torch.cosine_similarity(
             camouflaged_update.unsqueeze(0),
             benign_mean.unsqueeze(0)
         ).item()
-
+        
         direction_preservation = torch.cosine_similarity(
             v_malicious.unsqueeze(0),
             camouflaged_update.unsqueeze(0)
         ).item()
 
-        print(f"    规范: {original_norm:.4f} -> {final_norm:.4f}")
-        print(f"    方向保持: {direction_preservation:.4f}")
-        print(f"    最终相似度: {final_sim_with_mean:.4f}")
+        print(f"    Attacker {self.client_id} - Round {self.current_round}:")
+        print(f"      放大因子: {amplification_factor:.1f}, beta: {self.beta:.1f}")
+        print(f"      规范: {original_norm:.4f} -> {final_norm:.4f}")
+        print(f"      方向保持: {direction_preservation:.4f}")
+        print(f"      最终相似度: {final_sim_with_mean:.4f} (目标: {target_similarity:.3f})")
+        
+        # 记录与良性分布的差异
+        sim_diff = abs(final_sim_with_mean - benign_sim_mean)
+        print(f"      与良性均值差异: {sim_diff:.3f}")
 
         return camouflaged_update
     
