@@ -386,13 +386,13 @@ def main():
 
         'client_lr': 1e-5,
 
-        'poison_rate': 2,  # Base rate (will be adjusted progressively)
+        'poison_rate': 3,  # Base rate (will be adjusted progressively)
 
         'defense_threshold': 0.25,
 
         'local_epochs': 2,
 
-        'base_amplification_factor': 3.0,
+        'base_amplification_factor': 4.0,
 
         'progressive_attack': True  # Enable progressive strategy
 

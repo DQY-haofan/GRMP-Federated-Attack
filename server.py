@@ -6,7 +6,7 @@ import numpy as np
 from typing import List, Dict, Tuple
 import copy
 from client import BenignClient, AttackerClient
-
+import torch.nn.functional as F  # 添加这一行
 
 class Server:
     """联邦学习服务器 - 增强稳定性版本"""
@@ -46,18 +46,23 @@ class Server:
             client.reset_optimizer()
 
     def _compute_similarities(self, updates: List[torch.Tensor]) -> np.ndarray:
-        """计算更新之间的余弦相似度"""
+        """计算更新之间的余弦相似度 - 调整版本"""
         update_matrix = torch.stack(updates)
-        avg_update = update_matrix.mean(dim=0)
+        
+        # 使用加权平均而不是简单平均
+        # 给予norm较大的更新更多权重（它们通常更稳定）
+        norms = torch.norm(update_matrix, dim=1)
+        weights = F.softmax(norms, dim=0)
+        avg_update = torch.sum(update_matrix * weights.unsqueeze(1), dim=0)
+        
         similarities = []
-
         for update in updates:
             sim = torch.cosine_similarity(
                 update.unsqueeze(0),
                 avg_update.unsqueeze(0)
             ).item()
             similarities.append(sim)
-
+        
         return np.array(similarities)
 
     def aggregate_updates(self, updates: List[torch.Tensor],
@@ -180,11 +185,11 @@ class Server:
         current_asr = self.history['asr'][-1]
 
         # 如果ASR波动过大，调整服务器学习率
-        if abs(asr_change) > 0.15:  # 波动超过15%
+        if abs(asr_change) > 0.60:  # 波动超过15%
             self.server_lr = max(0.5, self.server_lr * 0.9)  # 降低学习率
             print(f"  🔄 检测到大幅波动，降低服务器学习率至: {self.server_lr:.2f}")
         elif abs(asr_change) < 0.05 and round_num > 5:  # 稳定后可以加速
-            self.server_lr = min(0.95, self.server_lr * 1.05)
+            self.server_lr = min(0.95, self.server_lr * 1.2)
             print(f"  🔄 系统稳定，提高服务器学习率至: {self.server_lr:.2f}")
 
     def run_round(self, round_num: int) -> Dict:

@@ -108,9 +108,9 @@ class AttackerClient(Client):
         self.benign_updates = []
 
         # 渐进式攻击参数（调整为更温和）
-        self.base_amplification = 1.8  # 降低基础放大因子
+        self.base_amplification = 1.2  # 降低基础放大因子
         self.progressive_enabled = True
-        self.beta = 0.3
+        self.beta = 0.2
 
         # 动量机制（关键改进）
         self.momentum = 0.7  # 保持70%的历史攻击方向
@@ -120,6 +120,9 @@ class AttackerClient(Client):
         # 自适应参数
         self.consecutive_failures = 0
         self.consecutive_successes = 0
+
+        self.similarity_target = 0.35  # 目标相似度（模仿良性客户端）
+        self.similarity_std = 0.08     # 相似度标准差
 
     def prepare_for_round(self, round_num: int):
         """为新轮次准备"""
@@ -142,10 +145,10 @@ class AttackerClient(Client):
 
         # 渐进式学习率调整（更温和）
         if self.progressive_enabled:
-            if self.current_round < 5:
+            if self.current_round < 3:
+                effective_lr = self.lr * 0.6
+            elif self.current_round < 7:
                 effective_lr = self.lr * 0.7
-            elif self.current_round < 10:
-                effective_lr = self.lr * 0.9
             else:
                 effective_lr = self.lr * 1.1  # 不要过度增加
 
@@ -200,23 +203,37 @@ class AttackerClient(Client):
         if not self.benign_updates:
             print(f"    Attacker {self.client_id}: 无良性更新可用")
             return poisoned_update
+        # 计算良性更新的统计特性
+        benign_mean = torch.stack(self.benign_updates).mean(dim=0)
+        benign_std = torch.stack(self.benign_updates).std(dim=0).mean().item()
+        
+        # 计算当前与良性均值的相似度
+        current_sim = torch.cosine_similarity(
+            poisoned_update.unsqueeze(0),
+            benign_mean.unsqueeze(0)
+        ).item()
 
         # 渐进式放大因子（更温和）
         if self.progressive_enabled:
-            if self.current_round < 5:
-                amplification_factor = self.base_amplification * 0.6
-                self.beta = 0.4
-            elif self.current_round < 10:
-                amplification_factor = self.base_amplification * 0.8
-                self.beta = 0.5
-            elif self.current_round < 15:
-                amplification_factor = self.base_amplification * 1.0
-                self.beta = 0.6
-            else:
+            if self.current_round < 3:
+                amplification_factor = self.base_amplification * 1
+                self.beta = 0.3  # 降低from 0.6
+            elif self.current_round < 5:
                 amplification_factor = self.base_amplification * 1.2
-                self.beta = 0.7
+                self.beta = 0.35  # 降低from 0.7
+            elif self.current_round < 8:
+                amplification_factor = self.base_amplification * 1.4
+                self.beta = 0.4  # 降低from 0.8
+            else:
+                amplification_factor = self.base_amplification * 1.6
+                self.beta = 0.45  # 降低from 0.9
         else:
             amplification_factor = self.base_amplification
+
+        # 添加随机波动来模拟IID特性
+        random_factor = self.get_iid_random_factor()
+        amplification_factor = amplification_factor * random_factor
+      
 
         # 平滑放大因子变化
         if self.prev_amplification is not None:
@@ -247,7 +264,7 @@ class AttackerClient(Client):
             return v_malicious
 
         proj_v_malicious = (torch.dot(best_neighbor, v_malicious) / dot_product) * v_malicious
-        v_orthogonal = best_neighbor - proj_v_malicious
+        v_orthogonal = best_neighbor * 0.3 - proj_v_malicious
 
         # Step 4: 构建最终更新
         camouflaged_update = v_malicious + self.beta * v_orthogonal
@@ -272,6 +289,28 @@ class AttackerClient(Client):
         print(f"    最终相似度: {final_sim_with_mean:.4f}")
 
         return camouflaged_update
+    
+    
+    def get_iid_random_factor(self, base_value=1.0):
+        """生成符合IID特性的噪声因子"""
+        # 使用Beta分布生成有界噪声（更自然）
+        alpha, beta = 2, 2  # 形状参数
+        beta_sample = np.random.beta(alpha, beta)
+        
+        # 映射到[-0.3, 0.3]范围
+        noise = (beta_sample - 1) * 0.8
+        
+        # 添加小幅高斯噪声
+        gaussian_noise = np.random.normal(0, 0.1)
+        
+        # 客户端特定的偏移（但要小）
+        client_offset = 0.02 * np.sin(self.client_id * 3.14)
+        
+        # 轮次相关的波动
+        round_wave = 0.03 * np.sin(self.current_round * 0.8 + self.client_id)
+        
+        total_noise = noise + gaussian_noise + client_offset + round_wave
+        return base_value + total_noise
 
     def _construct_graph(self, updates: List[torch.Tensor]) -> tuple:
         """构建图结构"""

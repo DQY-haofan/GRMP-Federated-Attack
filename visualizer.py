@@ -1,6 +1,6 @@
 """
 Enhanced GRMP Attack Visualization for Top-tier Journal
-Three core figures with professional styling
+Three core figures with professional styling and dynamic y-axis limits
 
 SIZE ADJUSTMENT GUIDE:
 ---------------------
@@ -76,15 +76,10 @@ def plot_attack_performance_enhanced(json_file_path, output_dir=None):
     # Add background shading with soft colors
     # Trust building phase (light green)
     ax1.axvspan(0.5, 5.5, alpha=0.15, color='#90EE90', zorder=0)
-    # ax1.text(3, 0.85, 'Trust Building', ha='center', va='center',
-    #          fontsize=14, fontweight='bold', color='#2E8B57', alpha=0.8)
-
     # Attack escalation phase (light red)
     ax1.axvspan(5.5, 10.5, alpha=0.15, color='#FFB6C1', zorder=0)
-    # ax1.text(8, 0.85, 'Attack Phase', ha='center', va='center',
-    #          fontsize=14, fontweight='bold', color='#DC143C', alpha=0.8)
 
-    # Plot Learning Accuracy (left axis) - MODIFIED
+    # Plot Learning Accuracy (left axis)
     line1 = ax1.plot(rounds, fl_acc, 's-', color='#4169E1', linewidth=3,
                     markersize=10, markerfacecolor='white', markeredgewidth=2.5,
                     markeredgecolor='#4169E1', label='Learning Accuracy')
@@ -93,7 +88,7 @@ def plot_attack_performance_enhanced(json_file_path, output_dir=None):
     ax1.set_ylabel('Learning Accuracy', fontsize=16, color='#4169E1', fontweight='bold')
     ax1.tick_params(axis='y', labelcolor='#4169E1', labelsize=14)
 
-    # Plot ASR (right axis) - MODIFIED
+    # Plot ASR (right axis)
     line2 = ax2.plot(rounds, asr, 'o-', color='#DC143C', linewidth=3,
                     markersize=10, markerfacecolor='white', markeredgewidth=2.5,
                     markeredgecolor='#DC143C', label='Attack Success Rate (ASR)')
@@ -105,8 +100,6 @@ def plot_attack_performance_enhanced(json_file_path, output_dir=None):
     max_asr_idx = asr.index(max(asr))
     ax2.scatter(rounds[max_asr_idx], asr[max_asr_idx], s=200,
                color='#DC143C', zorder=5, edgecolors='black', linewidth=2)
-
-    # Add annotation for peak
 
     # Combined legend
     lines = line1 + line2
@@ -121,10 +114,20 @@ def plot_attack_performance_enhanced(json_file_path, output_dir=None):
     # Grid
     ax1.grid(True, alpha=0.3, linestyle='--', axis='y')
 
-    # Set limits
+    # Set x-axis limits
     ax1.set_xlim(0.5, 10.5)
-    ax1.set_ylim(0.75, 0.95)  # Adjusted for accuracy range
-    ax2.set_ylim(-0.05, 0.9)
+    
+    # Dynamic y-axis limits for Learning Accuracy
+    acc_min = min(fl_acc)
+    acc_max = max(fl_acc)
+    acc_range = acc_max - acc_min
+    ax1.set_ylim(acc_min - 0.05 * acc_range, acc_max + 0.2 * acc_range)  # 20% extra space on top
+    
+    # Dynamic y-axis limits for ASR
+    asr_min = min(asr)
+    asr_max = max(asr)
+    asr_range = asr_max - asr_min
+    ax2.set_ylim(asr_min - 0.05 * asr_range, asr_max + 0.2 * asr_range)  # 20% extra space on top
 
     # Ensure integer x-ticks
     ax1.set_xticks(rounds)
@@ -195,13 +198,13 @@ def plot_similarity_evolution_bars_style(json_file_path, output_dir=None):
         benign_sims_by_round.append(benign_sims)
         attacker_sims_by_round.append(attacker_sims)
 
-    # Plot defense threshold as bars - MODIFIED
+    # Plot defense threshold as bars
     bar_width = 0.8
     threshold_bars = ax.bar(rounds, thresholds, width=bar_width,
                            color='#228B22', alpha=0.3, edgecolor='#228B22',
                            linewidth=1.5, label='Defense threshold', zorder=1)
 
-    # Plot benign users as average line - MODIFIED back to average
+    # Plot benign users as average line
     benign_avg_sims = []
     for benign_sims in benign_sims_by_round:
         if benign_sims:
@@ -215,7 +218,7 @@ def plot_similarity_evolution_bars_style(json_file_path, output_dir=None):
            markeredgewidth=2.5, label='Benign users (avg)',
            zorder=4)
 
-    # Plot attackers as lines (keep original) - MODIFIED z-order
+    # Plot attackers as lines
     # Reorganize attacker data by attacker ID
     attacker_trajectories = {aid: [] for aid in range(num_attackers)}
 
@@ -240,15 +243,6 @@ def plot_similarity_evolution_bars_style(json_file_path, output_dir=None):
                    label=f'Attacker {aid + 1}',
                    zorder=5)
 
-    # Add subtle background regions (adjusted for bar chart)
-    # No need for fill_between since threshold is now shown as bars
-
-    # Add text annotations for zones
-    # ax.text(5.5, 0.15, 'Below Threshold', ha='center', va='center',
-    #        fontsize=12, color='red', alpha=0.5, fontweight='bold')
-    # ax.text(5.5, 0.65, 'Above Threshold', ha='center', va='center',
-    #        fontsize=12, color='green', alpha=0.5, fontweight='bold')
-
     # Styling
     ax.set_xlabel('Communication Round', fontsize=16, fontweight='bold')
     ax.set_ylabel('Cosine Similarity', fontsize=16, fontweight='bold')
@@ -263,14 +257,23 @@ def plot_similarity_evolution_bars_style(json_file_path, output_dir=None):
     ax.grid(True, alpha=0.3, linestyle='--', axis='y')
     ax.set_axisbelow(True)
 
-    # Set limits
+    # Set x-axis limits
     ax.set_xlim(0.5, max(rounds) + 0.5)
-    ax.set_ylim(0, 0.8)
+    
+    # Dynamic y-axis limits
+    all_values = []
+    all_values.extend(thresholds)
+    all_values.extend(benign_avg_sims)
+    for trajectory in attacker_trajectories.values():
+        all_values.extend([v for v in trajectory if v is not None])
+    
+    y_min = min(all_values)
+    y_max = max(all_values)
+    y_range = y_max - y_min
+    ax.set_ylim(y_min - 0.05 * y_range, y_max + 0.2 * y_range)  # 20% extra space on top
 
     # Set x-ticks
     ax.set_xticks(rounds)
-
-    # Removed annotation about attackers evading detection
 
     # Save figure
     plt.tight_layout()
@@ -410,9 +413,25 @@ def plot_similarity_individual_benign(json_file_path, output_dir=None):
     ax.grid(True, alpha=0.3, linestyle='--', axis='y')
     ax.set_axisbelow(True)
 
-    # Set limits
+    # Set x-axis limits
     ax.set_xlim(0.5, max(rounds) + 0.5)
-    ax.set_ylim(0, 0.8)
+    
+    # Dynamic y-axis limits
+    all_values = []
+    all_values.extend(thresholds)
+    
+    # Add all benign values
+    for trajectory in benign_trajectories.values():
+        all_values.extend([v for v in trajectory if v is not None])
+    
+    # Add all attacker values
+    for trajectory in attacker_trajectories.values():
+        all_values.extend([v for v in trajectory if v is not None])
+    
+    y_min = min(all_values)
+    y_max = max(all_values)
+    y_range = y_max - y_min
+    ax.set_ylim(y_min - 0.05 * y_range, y_max + 0.2 * y_range)  # 20% extra space on top
 
     # Set x-ticks
     ax.set_xticks(rounds)
@@ -451,7 +470,7 @@ def generate_paper_figures(json_file_path):
 
 if __name__ == "__main__":
     # Path to your JSON file
-    json_file = 'progressive_grmp_progressive_semantic_poisoning.json'
+    json_file = './results/progressive_grmp_progressive_semantic_poisoning.json'
 
     # Generate all three figures
     generate_paper_figures(json_file)
