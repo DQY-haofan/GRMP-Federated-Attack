@@ -221,17 +221,17 @@ class AttackerClient(Client):
         # 渐进式放大因子（更温和）
         if self.progressive_enabled:
             if self.current_round < 3:
-                amplification_factor = self.base_amplification * 1
-                self.beta = 0.4  # 降低from 0.6
+                amplification_factor = self.base_amplification * 0.8
+                self.beta = 0.5  # 降低from 0.6
             elif self.current_round < 5:
-                amplification_factor = self.base_amplification * 1.2
-                self.beta = 0.4  # 降低from 0.7
+                amplification_factor = self.base_amplification * 0.9
+                self.beta = 0.5  # 降低from 0.7
             elif self.current_round < 8:
-                amplification_factor = self.base_amplification * 1.4
-                self.beta = 0.4  # 降低from 0.8
+                amplification_factor = self.base_amplification * 0.9
+                self.beta = 0.5  # 降低from 0.8
             else:
-                amplification_factor = self.base_amplification * 1.6
-                self.beta = 0.4  # 降低from 0.9
+                amplification_factor = self.base_amplification * 0.9
+                self.beta = 0.5  # 降低from 0.9
         else:
             amplification_factor = self.base_amplification
 
@@ -303,7 +303,7 @@ class AttackerClient(Client):
         beta_sample = np.random.beta(alpha, beta)
         
         # 映射到[-0.3, 0.3]范围
-        noise = (beta_sample - 0.8) * 0.8
+        noise = (beta_sample - 0.8) * 1
         
         # 添加小幅高斯噪声
         gaussian_noise = np.random.normal(0, 0.1)

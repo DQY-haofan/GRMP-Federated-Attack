@@ -378,21 +378,21 @@ def main():
 
         'seed': 42,
 
-        'num_clients': 5,
+        'num_clients': 6,
 
         'num_attackers': 2,  # 25% attackers
 
-        'num_rounds': 10,  # More rounds for progressive attack
+        'num_rounds': 15,  # More rounds for progressive attack
 
-        'client_lr': 1e-4,
+        'client_lr': 1e-5,
 
         'poison_rate': 3,  # Base rate (will be adjusted progressively)
 
-        'defense_threshold': 0.25,
+        'defense_threshold': 0.15,
 
         'local_epochs': 2,
 
-        'base_amplification_factor': 4.0,
+        'base_amplification_factor': 3,
 
         'progressive_attack': True  # Enable progressive strategy
 
