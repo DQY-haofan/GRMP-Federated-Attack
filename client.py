@@ -46,45 +46,50 @@ class BenignClient(Client):
         self.set_round(round_num)
 
     def local_train(self, epochs=None) -> torch.Tensor:
-        """执行本地训练"""
+        """执行本地训练 - 添加近端正则化"""
         if epochs is None:
             epochs = self.local_epochs
-
+            
         self.model.train()
         initial_params = self.model.get_flat_params().clone()
-
+        
+        # 近端正则化系数
+        mu = 0.01  # 控制更新不要偏离初始模型太远
+        
         for epoch in range(epochs):
             epoch_loss = 0
             num_batches = 0
-
+            
             pbar = tqdm(self.data_loader,
-                        desc=f'Client {self.client_id} - Epoch {epoch + 1}/{epochs}',
-                        leave=False)
-
+                    desc=f'Client {self.client_id} - Epoch {epoch + 1}/{epochs}',
+                    leave=False)
+            
             for batch in pbar:
                 input_ids = batch['input_ids'].to(self.device)
                 attention_mask = batch['attention_mask'].to(self.device)
                 labels = batch['labels'].to(self.device)
-
+                
                 outputs = self.model(input_ids, attention_mask)
-                loss = nn.CrossEntropyLoss()(outputs, labels)
-
+                ce_loss = nn.CrossEntropyLoss()(outputs, labels)
+                
+                # 添加近端正则化项
+                current_params = self.model.get_flat_params()
+                proximal_term = mu * torch.norm(current_params - initial_params) ** 2
+                
+                loss = ce_loss + proximal_term
+                
                 self.optimizer.zero_grad()
                 loss.backward()
-
+                
                 torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
-
+                
                 self.optimizer.step()
-
+                
                 epoch_loss += loss.item()
                 num_batches += 1
-
+                
                 pbar.set_postfix({'loss': loss.item()})
-
-            if num_batches > 0:
-                avg_loss = epoch_loss / num_batches
-                print(f"    Client {self.client_id} - Epoch {epoch + 1} avg loss: {avg_loss:.4f}")
-
+        
         return self.get_model_update(initial_params)
 
     def receive_benign_updates(self, updates: List[torch.Tensor]):
@@ -217,16 +222,16 @@ class AttackerClient(Client):
         if self.progressive_enabled:
             if self.current_round < 3:
                 amplification_factor = self.base_amplification * 1
-                self.beta = 0.3  # 降低from 0.6
+                self.beta = 0.4  # 降低from 0.6
             elif self.current_round < 5:
                 amplification_factor = self.base_amplification * 1.2
-                self.beta = 0.35  # 降低from 0.7
+                self.beta = 0.4  # 降低from 0.7
             elif self.current_round < 8:
                 amplification_factor = self.base_amplification * 1.4
                 self.beta = 0.4  # 降低from 0.8
             else:
                 amplification_factor = self.base_amplification * 1.6
-                self.beta = 0.45  # 降低from 0.9
+                self.beta = 0.4  # 降低from 0.9
         else:
             amplification_factor = self.base_amplification
 
@@ -298,7 +303,7 @@ class AttackerClient(Client):
         beta_sample = np.random.beta(alpha, beta)
         
         # 映射到[-0.3, 0.3]范围
-        noise = (beta_sample - 1) * 0.8
+        noise = (beta_sample - 0.8) * 0.8
         
         # 添加小幅高斯噪声
         gaussian_noise = np.random.normal(0, 0.1)

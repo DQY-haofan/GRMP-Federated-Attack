@@ -121,13 +121,13 @@ def plot_attack_performance_enhanced(json_file_path, output_dir=None):
     acc_min = min(fl_acc)
     acc_max = max(fl_acc)
     acc_range = acc_max - acc_min
-    ax1.set_ylim(acc_min - 0.05 * acc_range, acc_max + 0.2 * acc_range)  # 20% extra space on top
+    ax1.set_ylim(acc_min - 0.05 * acc_range, acc_max + 0.4 * acc_range)  # 20% extra space on top
     
     # Dynamic y-axis limits for ASR
     asr_min = min(asr)
     asr_max = max(asr)
     asr_range = asr_max - asr_min
-    ax2.set_ylim(asr_min - 0.05 * asr_range, asr_max + 0.2 * asr_range)  # 20% extra space on top
+    ax2.set_ylim(asr_min - 0.05 * asr_range, asr_max + 0.4 * asr_range)  # 20% extra space on top
 
     # Ensure integer x-ticks
     ax1.set_xticks(rounds)
@@ -270,7 +270,7 @@ def plot_similarity_evolution_bars_style(json_file_path, output_dir=None):
     y_min = min(all_values)
     y_max = max(all_values)
     y_range = y_max - y_min
-    ax.set_ylim(y_min - 0.05 * y_range, y_max + 0.2 * y_range)  # 20% extra space on top
+    ax.set_ylim(y_min - 0.05 * y_range, y_max + 0.3 * y_range)  # 20% extra space on top
 
     # Set x-ticks
     ax.set_xticks(rounds)
@@ -349,8 +349,8 @@ def plot_similarity_individual_benign(json_file_path, output_dir=None):
                            linewidth=1.5, label='Defense threshold', zorder=1)
 
     # Plot each benign user individually
-    benign_colors = ['#4682B4', '#5F9EA0', '#6495ED']  # Different blues
-    benign_markers = ['o', 's', '^']  # Different markers
+    benign_colors = ['#4682B4', '#5F9EA0', '#6495ED', '#4169E1']  # 添加第4种蓝色
+    benign_markers = ['o', 's', '^', 'D']  # 添加菱形标记
     
     # Organize benign data by user ID
     benign_trajectories = {uid: [] for uid in range(num_benign)}
@@ -431,7 +431,7 @@ def plot_similarity_individual_benign(json_file_path, output_dir=None):
     y_min = min(all_values)
     y_max = max(all_values)
     y_range = y_max - y_min
-    ax.set_ylim(y_min - 0.05 * y_range, y_max + 0.2 * y_range)  # 20% extra space on top
+    ax.set_ylim(y_min - 0.05 * y_range, y_max + 0.4 * y_range)  # 20% extra space on top
 
     # Set x-ticks
     ax.set_xticks(rounds)
