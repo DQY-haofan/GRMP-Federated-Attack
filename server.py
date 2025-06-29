@@ -46,22 +46,23 @@ class Server:
             client.reset_optimizer()
 
     def _compute_similarities(self, updates: List[torch.Tensor]) -> np.ndarray:
-        """计算更新之间的余弦相似度 - 调整版本"""
+        """计算更新之间的余弦相似度 - 改进版本"""
         update_matrix = torch.stack(updates)
         
-        # 使用加权平均而不是简单平均
-        # 给予norm较大的更新更多权重（它们通常更稳定）
-        norms = torch.norm(update_matrix, dim=1)
-        weights = F.softmax(norms, dim=0)
-        avg_update = torch.sum(update_matrix * weights.unsqueeze(1), dim=0)
-        
+        # 方法1：使用中位数而不是平均值（更鲁棒）
+        # 计算每个更新与其他所有更新的相似度中位数
         similarities = []
-        for update in updates:
-            sim = torch.cosine_similarity(
-                update.unsqueeze(0),
-                avg_update.unsqueeze(0)
-            ).item()
-            similarities.append(sim)
+        for i, update_i in enumerate(updates):
+            pairwise_sims = []
+            for j, update_j in enumerate(updates):
+                if i != j:
+                    sim = torch.cosine_similarity(
+                        update_i.unsqueeze(0),
+                        update_j.unsqueeze(0)
+                    ).item()
+                    pairwise_sims.append(sim)
+            # 使用中位数而不是与平均值的相似度
+            similarities.append(np.median(pairwise_sims))
         
         return np.array(similarities)
 
