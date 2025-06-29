@@ -384,7 +384,7 @@ def main():
 
         'num_rounds': 10,  # More rounds for progressive attack
 
-        'client_lr': 1e-5,
+        'client_lr': 1e-4,
 
         'poison_rate': 3,  # Base rate (will be adjusted progressively)
 
