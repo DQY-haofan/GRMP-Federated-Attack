@@ -230,15 +230,15 @@ class AttackerClient(Client):
             if self.current_round < 5:
                 amplification_factor = self.base_amplification * 0.4  # 更低起点
                 self.beta = 0.3
-                target_similarity = benign_sim_mean + benign_sim_std  # 稍高于平均
+                target_similarity = benign_sim_mean - 0.5 * benign_sim_std  # 稍高于平均
             elif self.current_round < 10:
                 amplification_factor = self.base_amplification * 0.6
                 self.beta = 0.4
-                target_similarity = benign_sim_mean + 0.5 * benign_sim_std
+                target_similarity = benign_sim_mean - 1 * benign_sim_std
             elif self.current_round < 15:
                 amplification_factor = self.base_amplification * 0.8
                 self.beta = 0.5
-                target_similarity = benign_sim_mean
+                target_similarity = benign_sim_mean - 1.5 * benign_sim_std
             else:
                 amplification_factor = self.base_amplification * 1.0
                 self.beta = 0.6

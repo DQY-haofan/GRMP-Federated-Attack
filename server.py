@@ -44,26 +44,59 @@ class Server:
         for client in self.clients:
             client.model.set_flat_params(global_params.clone())
             client.reset_optimizer()
-
     def _compute_similarities(self, updates: List[torch.Tensor]) -> np.ndarray:
-        """计算更新之间的余弦相似度 - 调整版本"""
-        update_matrix = torch.stack(updates)
-        
-        # 使用加权平均而不是简单平均
-        # 给予norm较大的更新更多权重（它们通常更稳定）
-        norms = torch.norm(update_matrix, dim=1)
-        weights = F.softmax(norms, dim=0)
-        avg_update = torch.sum(update_matrix * weights.unsqueeze(1), dim=0)
-        
-        similarities = []
-        for update in updates:
-            sim = torch.cosine_similarity(
-                update.unsqueeze(0),
-                avg_update.unsqueeze(0)
-            ).item()
-            similarities.append(sim)
-        
-        return np.array(similarities)
+      """混合相似度计算 - 结合两两相似度和与平均值的相似度"""
+      n_updates = len(updates)
+      
+      print("  📊 使用混合相似度计算")
+      
+      # 1. 计算两两相似度
+      pairwise_sims = []
+      for i in range(n_updates):
+          other_sims = []
+          for j in range(n_updates):
+              if i != j:
+                  sim = torch.cosine_similarity(
+                      updates[i].unsqueeze(0),
+                      updates[j].unsqueeze(0)
+                  ).item()
+                  other_sims.append(sim)
+          # 使用平均值而不是中位数（更宽松）
+          avg_sim = np.mean(other_sims) if other_sims else 0
+          pairwise_sims.append(avg_sim)
+      
+      # 2. 计算与平均值的相似度
+      avg_update = torch.stack(updates).mean(dim=0)
+      avg_sims = []
+      for update in updates:
+          sim = torch.cosine_similarity(
+              update.unsqueeze(0),
+              avg_update.unsqueeze(0)
+          ).item()
+          avg_sims.append(sim)
+      
+      # 3. 混合两种相似度（加权平均）
+      alpha = 0.7  # 两两相似度的权重
+      similarities = []
+      for i in range(n_updates):
+          mixed_sim = alpha * pairwise_sims[i] + (1 - alpha) * avg_sims[i]
+          similarities.append(mixed_sim)
+      
+      similarities = np.array(similarities)
+      
+      # 打印信息
+      print(f"  📈 混合相似度 - 均值: {similarities.mean():.3f}, "
+            f"标准差: {similarities.std():.3f}")
+      
+      # 显示每个客户端
+      num_attackers = 2
+      for i, sim in enumerate(similarities):
+          if i >= n_updates - num_attackers:
+              print(f"    客户端 {i} (攻击者): {sim:.3f}")
+          else:
+              print(f"    客户端 {i} (良性): {sim:.3f}")
+      
+      return similarities
 
     def aggregate_updates(self, updates: List[torch.Tensor],
                           client_ids: List[int]) -> Dict:
