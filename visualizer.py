@@ -32,15 +32,33 @@ import matplotlib.pyplot as plt
 import numpy as np
 from pathlib import Path
 
-# Set professional font settings
-plt.rcParams['font.family'] = 'serif'
-plt.rcParams['font.serif'] = ['Times New Roman', 'DejaVu Serif']
-plt.rcParams['font.size'] = 16
-plt.rcParams['axes.titlesize'] = 20
-plt.rcParams['axes.labelsize'] = 18
-plt.rcParams['xtick.labelsize'] = 16
-plt.rcParams['ytick.labelsize'] = 16
-plt.rcParams['legend.fontsize'] = 16
+# Font size configuration variables
+FONT_SIZE_BASE = 20
+FONT_SIZE_TITLE = 24
+FONT_SIZE_LABEL = 20
+FONT_SIZE_TICK = 20
+FONT_SIZE_LEGEND = 20
+
+# Specific font sizes used in functions
+FONT_SIZE_XLABEL = 20  # Used for x-axis labels in functions
+FONT_SIZE_YLABEL = 20  # Used for y-axis labels in functions
+FONT_SIZE_PLOT_TITLE = 24  # Used for plot titles in functions
+FONT_SIZE_TICK_PARAMS = 20  # Used for tick parameters in functions
+FONT_SIZE_LEGEND_SMALL = 20  # Used for smaller legends
+
+# Set professional font settings - 简化版
+plt.rcParams['font.family'] = 'STIXGeneral'  # STIX字体与Times New Roman非常相似
+plt.rcParams['font.size'] = FONT_SIZE_BASE
+plt.rcParams['axes.titlesize'] = FONT_SIZE_TITLE
+plt.rcParams['axes.labelsize'] = FONT_SIZE_LABEL
+plt.rcParams['xtick.labelsize'] = FONT_SIZE_TICK
+plt.rcParams['ytick.labelsize'] = FONT_SIZE_TICK
+plt.rcParams['legend.fontsize'] = FONT_SIZE_LEGEND
+plt.rcParams['mathtext.fontset'] = 'stix'
+
+# 确保PDF输出中字体可编辑
+plt.rcParams['pdf.fonttype'] = 42
+plt.rcParams['ps.fonttype'] = 42
 
 # Remove top and right spines for cleaner look
 plt.rcParams['axes.spines.top'] = False
@@ -86,17 +104,17 @@ def plot_attack_performance_enhanced(json_file_path, output_dir=None):
                     markersize=10, markerfacecolor='white', markeredgewidth=2.5,
                     markeredgecolor='#4169E1', label='Learning Accuracy')
 
-    ax1.set_xlabel('Communication Round', fontsize=16, fontweight='bold')
-    ax1.set_ylabel('Learning Accuracy', fontsize=16, color='#4169E1', fontweight='bold')
-    ax1.tick_params(axis='y', labelcolor='#4169E1', labelsize=14)
+    ax1.set_xlabel('Communication Round', fontsize=FONT_SIZE_XLABEL, fontweight='bold')
+    ax1.set_ylabel('Learning Accuracy', fontsize=FONT_SIZE_YLABEL, color='#4169E1', fontweight='bold')
+    ax1.tick_params(axis='y', labelcolor='#4169E1', labelsize=FONT_SIZE_TICK_PARAMS)
 
     # Plot ASR (right axis)
     line2 = ax2.plot(rounds, asr, 'o-', color='#DC143C', linewidth=3,
                     markersize=10, markerfacecolor='white', markeredgewidth=2.5,
                     markeredgecolor='#DC143C', label='Attack Success Rate (ASR)')
 
-    ax2.set_ylabel('Attack Success Rate', fontsize=16, color='#DC143C', fontweight='bold')
-    ax2.tick_params(axis='y', labelcolor='#DC143C', labelsize=14)
+    ax2.set_ylabel('Attack Success Rate', fontsize=FONT_SIZE_YLABEL, color='#DC143C', fontweight='bold')
+    ax2.tick_params(axis='y', labelcolor='#DC143C', labelsize=FONT_SIZE_TICK_PARAMS)
 
     # Highlight peak ASR
     max_asr_idx = asr.index(max(asr))
@@ -111,7 +129,7 @@ def plot_attack_performance_enhanced(json_file_path, output_dir=None):
 
     # Title
     ax1.set_title('Impact of GRMP Attack on Federated Learning Performance',
-                 fontsize=18, fontweight='bold', pad=20)
+                 fontsize=FONT_SIZE_PLOT_TITLE, fontweight='bold', pad=20)
 
     # Grid
     ax1.grid(True, alpha=0.3, linestyle='--', axis='y')
@@ -246,10 +264,10 @@ def plot_similarity_evolution_bars_style(json_file_path, output_dir=None):
                    zorder=5)
 
     # Styling
-    ax.set_xlabel('Communication Round', fontsize=16, fontweight='bold')
-    ax.set_ylabel('Cosine Similarity', fontsize=16, fontweight='bold')
+    ax.set_xlabel('Communication Round', fontsize=FONT_SIZE_XLABEL, fontweight='bold')
+    ax.set_ylabel('Cosine Similarity', fontsize=FONT_SIZE_YLABEL, fontweight='bold')
     ax.set_title('Stealthiness of GRMP Attack: Similarity Evolution Analysis',
-                fontsize=18, fontweight='bold', pad=20)
+                fontsize=FONT_SIZE_PLOT_TITLE, fontweight='bold', pad=20)
 
     # Legend
     ax.legend(loc='best', frameon=True, fancybox=True,
@@ -423,15 +441,15 @@ def plot_similarity_individual_benign(json_file_path, output_dir=None):
                    zorder=5)
 
     # Styling
-    ax.set_xlabel('Communication Round', fontsize=16, fontweight='bold')
-    ax.set_ylabel('Cosine Similarity', fontsize=16, fontweight='bold')
+    ax.set_xlabel('Communication Round', fontsize=FONT_SIZE_XLABEL, fontweight='bold')
+    ax.set_ylabel('Cosine Similarity', fontsize=FONT_SIZE_YLABEL, fontweight='bold')
     ax.set_title('Individual Client Similarity Evolution',
-                fontsize=18, fontweight='bold', pad=20)
+                fontsize=FONT_SIZE_PLOT_TITLE, fontweight='bold', pad=20)
 
     # Legend - adjust columns based on number of clients
     if num_benign > 4:
         ax.legend(loc='best', frameon=True, fancybox=True,
-                 shadow=True, framealpha=0.9, ncol=2, fontsize=14)
+                 shadow=True, framealpha=0.9, ncol=2, fontsize=FONT_SIZE_LEGEND_SMALL)
     else:
         ax.legend(loc='best', frameon=True, fancybox=True,
                  shadow=True, framealpha=0.9, ncol=2)
