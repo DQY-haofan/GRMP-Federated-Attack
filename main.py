@@ -382,7 +382,7 @@ def main():
 
         'num_attackers': 2,  # 25% attackers
 
-        'num_rounds': 20,  # More rounds for progressive attack: 15
+        'num_rounds': 15,  # More rounds for progressive attack: 15
 
         'client_lr': 1e-5, # Lower learning rate for stability
 
