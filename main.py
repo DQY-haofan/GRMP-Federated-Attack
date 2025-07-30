@@ -382,13 +382,13 @@ def main():
 
         'num_attackers': 2,  # 25% attackers
 
-        'num_rounds': 15,  # More rounds for progressive attack: 15
+        'num_rounds': 20,  # More rounds for progressive attack: 15
 
         'client_lr': 1e-5, # Lower learning rate for stability
 
         'poison_rate': 4,  # Base rate (will be adjusted progressively)
 
-        'defense_threshold': 0.07, # Lower threshold for progressive detection
+        'defense_threshold': 0.08, # Lower threshold for progressive detection
 
         'local_epochs': 2, # Local epochs for each client: 2
 

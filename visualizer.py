@@ -87,9 +87,9 @@ def plot_attack_performance_enhanced(json_file_path, output_dir=None):
     fig, ax1 = plt.subplots(figsize=(12, 8))
 
     # Truncate to first 14 rounds if data has more
-    rounds = metrics['rounds'][:15]
-    asr = metrics['attack_asr'][:15]
-    fl_acc = metrics['clean_acc'][:15]
+    rounds = metrics['rounds'][:20]
+    asr = metrics['attack_asr'][:20]
+    fl_acc = metrics['clean_acc'][:20]
 
     # Create second y-axis
     ax2 = ax1.twinx()
@@ -182,7 +182,7 @@ def plot_similarity_evolution_bars_style(json_file_path, output_dir=None):
         data = json.load(f)
 
     config = data['config']
-    results = data['results'][:15]  # Truncate to first 14 rounds
+    results = data['results'][:20]  # Truncate to first 14 rounds
 
     if output_dir is None:
         output_dir = Path('./results/figures')
@@ -329,7 +329,7 @@ def plot_similarity_individual_benign(json_file_path, output_dir=None):
         data = json.load(f)
 
     config = data['config']
-    results = data['results'][:15]  # Truncate to first 14 rounds
+    results = data['results'][:20]  # Truncate to first 14 rounds
 
     if output_dir is None:
         output_dir = Path('./results/figures')
