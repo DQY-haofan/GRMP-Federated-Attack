@@ -87,9 +87,9 @@ def plot_attack_performance_enhanced(json_file_path, output_dir=None):
     fig, ax1 = plt.subplots(figsize=(10, 6))
 
     # Truncate to first 14 rounds if data has more
-    rounds = metrics['rounds'][:15]
-    asr = metrics['attack_asr'][:15]
-    fl_acc = metrics['clean_acc'][:15]
+    rounds = metrics['rounds'][:30]
+    asr = metrics['attack_asr'][:30]
+    fl_acc = metrics['clean_acc'][:30]
 
     # Create second y-axis
     ax2 = ax1.twinx()
@@ -101,7 +101,7 @@ def plot_attack_performance_enhanced(json_file_path, output_dir=None):
     # Trust building phase (light green)
     ax1.axvspan(0.5, 5.5, alpha=0.15, color='#90EE90', zorder=0)
     # Attack escalation phase (light red) - extended to cover more rounds
-    ax1.axvspan(5.5, 15.5, alpha=0.15, color='#FFB6C1', zorder=0)
+    ax1.axvspan(5.5, 30.5, alpha=0.15, color='#FFB6C1', zorder=0)
 
     # Plot Learning Accuracy (left axis)
     line1 = ax1.plot(rounds, fl_acc, 's-', color='#4169E1', linewidth=3,
@@ -182,7 +182,7 @@ def plot_similarity_evolution_bars_style(json_file_path, output_dir=None):
         data = json.load(f)
 
     config = data['config']
-    results = data['results'][:13]  # Truncate to first 14 rounds
+    results = data['results'][:15]  # Truncate to first 14 rounds
 
     if output_dir is None:
         output_dir = Path('./results/figures')
@@ -329,7 +329,7 @@ def plot_similarity_individual_benign(json_file_path, output_dir=None):
         data = json.load(f)
 
     config = data['config']
-    results = data['results'][:15]  # Truncate to first 14 rounds
+    results = data['results'][:30]  # Truncate to first 14 rounds
 
     if output_dir is None:
         output_dir = Path('./results/figures')
@@ -509,8 +509,8 @@ def generate_paper_figures(json_file_path):
     """
     Generate all three figures for the paper
     """
-    print("Generating enhanced figures for paper (rounds 1-15)...")
-    # print("Note: If your data has 15 rounds, only the first 14 will be plotted.")
+    print("Generating enhanced figures for paper (rounds 1-30)...")
+    # print("Note: If your data has 30 rounds, only the first 14 will be plotted.")
 
     # Generate Figure 1: Attack Performance
     plot_attack_performance_enhanced(json_file_path)
