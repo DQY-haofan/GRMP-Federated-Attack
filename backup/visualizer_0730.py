@@ -65,10 +65,6 @@ plt.rcParams['axes.spines.top'] = False
 plt.rcParams['axes.spines.right'] = False
 
 
-
-
-
-
 def plot_attack_performance_enhanced(json_file_path, output_dir=None):
     """
     Figure 1: Learning Accuracy (left) and ASR (right) with professional styling
@@ -87,9 +83,9 @@ def plot_attack_performance_enhanced(json_file_path, output_dir=None):
     fig, ax1 = plt.subplots(figsize=(10, 6))
 
     # Truncate to first 14 rounds if data has more
-    rounds = metrics['rounds'][:15]
-    asr = metrics['attack_asr'][:15]
-    fl_acc = metrics['clean_acc'][:15]
+    rounds = metrics['rounds'][:13]
+    asr = metrics['attack_asr'][:13]
+    fl_acc = metrics['clean_acc'][:13]
 
     # Create second y-axis
     ax2 = ax1.twinx()
@@ -101,7 +97,7 @@ def plot_attack_performance_enhanced(json_file_path, output_dir=None):
     # Trust building phase (light green)
     ax1.axvspan(0.5, 5.5, alpha=0.15, color='#90EE90', zorder=0)
     # Attack escalation phase (light red) - extended to cover more rounds
-    ax1.axvspan(5.5, 15.5, alpha=0.15, color='#FFB6C1', zorder=0)
+    ax1.axvspan(5.5, 14.5, alpha=0.15, color='#FFB6C1', zorder=0)
 
     # Plot Learning Accuracy (left axis)
     line1 = ax1.plot(rounds, fl_acc, 's-', color='#4169E1', linewidth=3,
@@ -169,154 +165,147 @@ def plot_attack_performance_enhanced(json_file_path, output_dir=None):
     plt.close()
 
 
+def plot_similarity_evolution_bars_style(json_file_path, output_dir=None):
+    """
+    Figure 2: Similarity evolution with bars for benign users and lines for attackers
+    Following the reference style from the advisor
+    """
+    # Load data
+    with open(json_file_path, 'r') as f:
+        data = json.load(f)
 
+    config = data['config']
+    results = data['results'][:13]  # Truncate to first 14 rounds
 
+    if output_dir is None:
+        output_dir = Path('./results/figures')
+    output_dir.mkdir(exist_ok=True, parents=True)
 
-# def plot_similarity_evolution_bars_style(json_file_path, output_dir=None):
-#     """
-#     Figure 2: Similarity evolution with bars for benign users and lines for attackers
-#     Following the reference style from the advisor
-#     """
-#     # Load data
-#     with open(json_file_path, 'r') as f:
-#         data = json.load(f)
+    # Create figure - slightly wider for 14 rounds
+    fig, ax = plt.subplots(figsize=(10, 6))
 
-#     config = data['config']
-#     results = data['results'][:13]  # Truncate to first 14 rounds
+    # Remove top and right spines
+    ax.spines['top'].set_visible(False)
+    ax.spines['right'].set_visible(False)
 
-#     if output_dir is None:
-#         output_dir = Path('./results/figures')
-#     output_dir.mkdir(exist_ok=True, parents=True)
+    # Identify attackers
+    num_clients = config['num_clients']
+    num_attackers = config['num_attackers']
+    attacker_ids = list(range(num_clients - num_attackers, num_clients))
 
-#     # Create figure - slightly wider for 14 rounds
-#     fig, ax = plt.subplots(figsize=(10, 6))
+    # Collect data
+    rounds = []
+    thresholds = []
+    attacker_sims_by_round = []
+    benign_sims_by_round = []
 
-#     # Remove top and right spines
-#     ax.spines['top'].set_visible(False)
-#     ax.spines['right'].set_visible(False)
+    for round_data in results:
+        rounds.append(round_data['round'])
+        thresholds.append(round_data['defense']['threshold'])
 
-#     # Identify attackers
-#     num_clients = config['num_clients']
-#     num_attackers = config['num_attackers']
-#     attacker_ids = list(range(num_clients - num_attackers, num_clients))
+        sims = round_data['defense']['similarities']
 
-#     # Collect data
-#     rounds = []
-#     thresholds = []
-#     attacker_sims_by_round = []
-#     benign_sims_by_round = []
+        # Separate benign and attacker similarities
+        benign_sims = []
+        attacker_sims = []
 
-#     for round_data in results:
-#         rounds.append(round_data['round'])
-#         thresholds.append(round_data['defense']['threshold'])
+        for i, sim in enumerate(sims):
+            if i in attacker_ids:
+                attacker_sims.append(sim)
+            else:
+                benign_sims.append(sim)
 
-#         sims = round_data['defense']['similarities']
+        benign_sims_by_round.append(benign_sims)
+        attacker_sims_by_round.append(attacker_sims)
 
-#         # Separate benign and attacker similarities
-#         benign_sims = []
-#         attacker_sims = []
+    # Plot defense threshold as bars
+    bar_width = 0.8
+    threshold_bars = ax.bar(rounds, thresholds, width=bar_width,
+                           color='#228B22', alpha=0.3, edgecolor='#228B22',
+                           linewidth=1.5, label='Defense threshold', zorder=1)
 
-#         for i, sim in enumerate(sims):
-#             if i in attacker_ids:
-#                 attacker_sims.append(sim)
-#             else:
-#                 benign_sims.append(sim)
+    # Plot benign users as average line
+    benign_avg_sims = []
+    for benign_sims in benign_sims_by_round:
+        if benign_sims:
+            benign_avg_sims.append(np.mean(benign_sims))
+        else:
+            benign_avg_sims.append(0)
 
-#         benign_sims_by_round.append(benign_sims)
-#         attacker_sims_by_round.append(attacker_sims)
+    # Plot benign users average line
+    ax.plot(rounds, benign_avg_sims, 'o-', color='#4682B4',
+           linewidth=3, markersize=10, markerfacecolor='white',
+           markeredgewidth=2.5, label='Benign users (avg)',
+           zorder=4)
 
-#     # Plot defense threshold as bars
-#     bar_width = 0.8
-#     threshold_bars = ax.bar(rounds, thresholds, width=bar_width,
-#                            color='#228B22', alpha=0.3, edgecolor='#228B22',
-#                            linewidth=1.5, label='Defense threshold', zorder=1)
+    # Plot attackers as lines
+    # Reorganize attacker data by attacker ID
+    attacker_trajectories = {aid: [] for aid in range(num_attackers)}
 
-#     # Plot benign users as average line
-#     benign_avg_sims = []
-#     for benign_sims in benign_sims_by_round:
-#         if benign_sims:
-#             benign_avg_sims.append(np.mean(benign_sims))
-#         else:
-#             benign_avg_sims.append(0)
+    for round_sims in attacker_sims_by_round:
+        for aid in range(num_attackers):
+            if aid < len(round_sims):
+                attacker_trajectories[aid].append(round_sims[aid])
+            else:
+                attacker_trajectories[aid].append(None)
 
-#     # Plot benign users average line
-#     ax.plot(rounds, benign_avg_sims, 'o-', color='#4682B4',
-#            linewidth=3, markersize=10, markerfacecolor='white',
-#            markeredgewidth=2.5, label='Benign users (avg)',
-#            zorder=4)
+    # Plot each attacker's trajectory
+    attacker_colors = ['#DC143C', '#FF6347']
+    for aid, trajectory in attacker_trajectories.items():
+        valid_rounds = [r for r, s in zip(rounds, trajectory) if s is not None]
+        valid_sims = [s for s in trajectory if s is not None]
 
-#     # Plot attackers as lines
-#     # Reorganize attacker data by attacker ID
-#     attacker_trajectories = {aid: [] for aid in range(num_attackers)}
+        if valid_sims:
+            ax.plot(valid_rounds, valid_sims, 'o-',
+                   color=attacker_colors[aid % len(attacker_colors)],
+                   linewidth=3, markersize=10, markerfacecolor='white',
+                   markeredgewidth=2.5,
+                   label=f'Attacker {aid + 1}',
+                   zorder=5)
 
-#     for round_sims in attacker_sims_by_round:
-#         for aid in range(num_attackers):
-#             if aid < len(round_sims):
-#                 attacker_trajectories[aid].append(round_sims[aid])
-#             else:
-#                 attacker_trajectories[aid].append(None)
+    # Styling
+    ax.set_xlabel('Communication Round', fontsize=FONT_SIZE_XLABEL, fontweight='bold')
+    ax.set_ylabel('Cosine Similarity', fontsize=FONT_SIZE_YLABEL, fontweight='bold')
+    ax.set_title('Stealthiness of GRMP Attack: Similarity Evolution Analysis',
+                fontsize=FONT_SIZE_PLOT_TITLE, fontweight='bold', pad=20)
 
-#     # Plot each attacker's trajectory
-#     attacker_colors = ['#DC143C', '#FF6347']
-#     for aid, trajectory in attacker_trajectories.items():
-#         valid_rounds = [r for r, s in zip(rounds, trajectory) if s is not None]
-#         valid_sims = [s for s in trajectory if s is not None]
+    # Legend
+    ax.legend(loc='best', frameon=True, fancybox=True,
+             shadow=True, framealpha=0.9)
 
-#         if valid_sims:
-#             ax.plot(valid_rounds, valid_sims, 'o-',
-#                    color=attacker_colors[aid % len(attacker_colors)],
-#                    linewidth=3, markersize=10, markerfacecolor='white',
-#                    markeredgewidth=2.5,
-#                    label=f'Attacker {aid + 1}',
-#                    zorder=5)
+    # Grid
+    ax.grid(True, alpha=0.3, linestyle='--', axis='y')
+    ax.set_axisbelow(True)
 
-#     # Styling
-#     ax.set_xlabel('Communication Round', fontsize=FONT_SIZE_XLABEL, fontweight='bold')
-#     ax.set_ylabel('Cosine Similarity', fontsize=FONT_SIZE_YLABEL, fontweight='bold')
-#     ax.set_title('Stealthiness of GRMP Attack: Similarity Evolution Analysis',
-#                 fontsize=FONT_SIZE_PLOT_TITLE, fontweight='bold', pad=20)
-
-#     # Legend
-#     ax.legend(loc='best', frameon=True, fancybox=True,
-#              shadow=True, framealpha=0.9)
-
-#     # Grid
-#     ax.grid(True, alpha=0.3, linestyle='--', axis='y')
-#     ax.set_axisbelow(True)
-
-#     # Set x-axis limits with extra space on the left
-#     ax.set_xlim(0, max(rounds) + 0.5)  # Changed from 0.5 to 0 for left margin
+    # Set x-axis limits with extra space on the left
+    ax.set_xlim(0, max(rounds) + 0.5)  # Changed from 0.5 to 0 for left margin
     
-#     # Dynamic y-axis limits
-#     all_values = []
-#     all_values.extend(thresholds)
-#     all_values.extend(benign_avg_sims)
-#     for trajectory in attacker_trajectories.values():
-#         all_values.extend([v for v in trajectory if v is not None])
+    # Dynamic y-axis limits
+    all_values = []
+    all_values.extend(thresholds)
+    all_values.extend(benign_avg_sims)
+    for trajectory in attacker_trajectories.values():
+        all_values.extend([v for v in trajectory if v is not None])
     
-#     y_min = min(all_values)
-#     y_max = max(all_values)
-#     y_range = y_max - y_min
-#     ax.set_ylim(y_min - 0.05 * y_range, y_max + 0.3 * y_range)  # 30% extra space on top
+    y_min = min(all_values)
+    y_max = max(all_values)
+    y_range = y_max - y_min
+    ax.set_ylim(y_min - 0.05 * y_range, y_max + 0.3 * y_range)  # 30% extra space on top
 
-#     # Set x-ticks
-#     ax.set_xticks(rounds)
+    # Set x-ticks
+    ax.set_xticks(rounds)
 
-#     # Save figure
-#     plt.tight_layout()
+    # Save figure
+    plt.tight_layout()
 
-#     output_path_png = output_dir / 'figure2_similarity_evolution.png'
-#     output_path_pdf = output_dir / 'figure2_similarity_evolution.pdf'
+    output_path_png = output_dir / 'figure2_similarity_evolution.png'
+    output_path_pdf = output_dir / 'figure2_similarity_evolution.pdf'
 
-#     fig.savefig(output_path_png, dpi=300, bbox_inches='tight', facecolor='white')
-#     fig.savefig(output_path_pdf, bbox_inches='tight', facecolor='white')
+    fig.savefig(output_path_png, dpi=300, bbox_inches='tight', facecolor='white')
+    fig.savefig(output_path_pdf, bbox_inches='tight', facecolor='white')
 
-#     print(f"Figure 2 saved to: {output_path_png}")
-#     plt.close()
-
-
-
-
+    print(f"Figure 2 saved to: {output_path_png}")
+    plt.close()
 
 
 def plot_similarity_individual_benign(json_file_path, output_dir=None):
@@ -329,7 +318,7 @@ def plot_similarity_individual_benign(json_file_path, output_dir=None):
         data = json.load(f)
 
     config = data['config']
-    results = data['results'][:15]  # Truncate to first 14 rounds
+    results = data['results'][:13]  # Truncate to first 14 rounds
 
     if output_dir is None:
         output_dir = Path('./results/figures')
@@ -510,7 +499,7 @@ def generate_paper_figures(json_file_path):
     Generate all three figures for the paper
     """
     print("Generating enhanced figures for paper (rounds 1-14)...")
-    # print("Note: If your data has 15 rounds, only the first 14 will be plotted.")
+    print("Note: If your data has 15 rounds, only the first 14 will be plotted.")
 
     # Generate Figure 1: Attack Performance
     plot_attack_performance_enhanced(json_file_path)
