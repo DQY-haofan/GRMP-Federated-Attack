@@ -101,7 +101,7 @@ def plot_attack_performance_enhanced(json_file_path, output_dir=None):
     # Trust building phase (light green)
     ax1.axvspan(0.5, 6, alpha=0.15, color='#90EE90', zorder=0)
     # Attack escalation phase (light red) - extended to cover more rounds
-    ax1.axvspan(6, 15.5, alpha=0.15, color='#FFB6C1', zorder=0)
+    ax1.axvspan(6, 20.5, alpha=0.15, color='#FFB6C1', zorder=0)
 
     # Plot Learning Accuracy (left axis)
     line1 = ax1.plot(rounds, fl_acc, 's-', color='#4169E1', linewidth=3,
