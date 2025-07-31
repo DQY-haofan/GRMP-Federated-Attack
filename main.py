@@ -1,5 +1,6 @@
-# main.py - Progressive GRMP Attack Experiment
-
+# main.py - GRMP Attack Experiment
+# This script sets up and runs a federated learning experiment with a progressive GRMP attack
+# on the AG News classification task, simulating a gradual poisoning strategy to evade detection.
 
 import torch
 
@@ -11,11 +12,11 @@ import json
 
 from pathlib import Path
 
-from torch.utils.data import DataLoader  # 添加这个导入！
+from torch.utils.data import DataLoader
 
 from models import NewsClassifierModel, VGAE
 
-from data_loader import DataManager, NewsDataset  # 也导入 NewsDataset
+from data_loader import DataManager, NewsDataset
 
 from client import BenignClient, AttackerClient
 
@@ -30,11 +31,9 @@ warnings.filterwarnings('ignore')
 warnings.filterwarnings('ignore')
 
 
+# Initialize experiment components with progressive attack support
 def setup_experiment(config):
-    """Initialize experiment components with progressive attack support"""
-
     # Set random seeds
-
     torch.manual_seed(config['seed'])
 
     np.random.seed(config['seed'])
@@ -64,9 +63,9 @@ def setup_experiment(config):
 
         num_clients=config['num_clients'],
 
-        num_attackers=config['num_attackers'],
+        num_attackers=config['num_attackers'], 
 
-        poison_rate=config['poison_rate']  # Base rate for progressive poisoning
+        poison_rate=config['poison_rate']
 
     )
 
@@ -198,8 +197,8 @@ def setup_experiment(config):
     return server, results_dir, config
 
 
+# Run the experiment with progressive attack strategy
 def run_experiment(config):
-    """Run the progressive GRMP attack experiment"""
 
     # Setup
 
@@ -270,8 +269,8 @@ def run_experiment(config):
     return server.log_data, progressive_metrics
 
 
+# Analyze results of the progressive attack
 def analyze_progressive_results(results, metrics, config):
-    """Analyze progressive attack results"""
 
     print("\n" + "=" * 50)
 
@@ -369,8 +368,8 @@ def analyze_progressive_results(results, metrics, config):
             print(f"  ASR ≥ {threshold * 100:.0f}%: Not achieved")
 
 
+# Main function to run the progressive GRMP attack experiment
 def main():
-    """Main experiment with progressive attack configuration"""
 
     config = {
 
@@ -380,9 +379,9 @@ def main():
 
         'num_clients': 6, # Total clients including attackers
 
-        'num_attackers': 2,  # 25% attackers
+        'num_attackers': 2,  # Attackers
 
-        'num_rounds': 20,  # More rounds for progressive attack: 15
+        'num_rounds': 20,  # More rounds for progressive attack
 
         'client_lr': 1e-5, # Lower learning rate for stability
 
@@ -390,7 +389,7 @@ def main():
 
         'defense_threshold': 0.0736, # Lower threshold for progressive detection
 
-        'local_epochs': 2, # Local epochs for each client: 2
+        'local_epochs': 2, # Local epochs for each client
 
         'base_amplification_factor': 5, # Base amplification factor for attackers
 

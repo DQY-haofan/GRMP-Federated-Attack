@@ -1,4 +1,4 @@
-# models.py
+# models.py # This module defines the NewsClassifierModel for AG News classification and the VGAE model for GRMP attack.
 
 import torch
 
@@ -97,8 +97,6 @@ class GraphConvolutionLayer(nn.Module):
 
 class VGAE(nn.Module):
     """Variational Graph Autoencoder for GRMP attack
-
-
 
     This model learns the relational structure among benign updates
 

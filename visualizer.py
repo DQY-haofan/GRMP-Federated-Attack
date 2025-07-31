@@ -1,32 +1,3 @@
-"""
-Enhanced GRMP Attack Visualization for Top-tier Journal
-Three core figures with professional styling and dynamic y-axis limits
-Updated to support 1-14 rounds with better x-axis spacing
-
-SIZE ADJUSTMENT GUIDE:
----------------------
-To adjust figure and font sizes, modify these parameters:
-
-1. FIGURE SIZE: Change figsize in plot functions
-   - Figure 1: fig, ax1 = plt.subplots(figsize=(10, 6))  # (width, height) in inches
-   - Figure 2: fig, ax = plt.subplots(figsize=(12, 7))
-   - Recommended for larger: (12, 8) or (14, 8)
-
-2. FONT SIZES: Modify plt.rcParams at the beginning
-   - Base font: plt.rcParams['font.size'] = 14  # Try 16 or 18
-   - Title: plt.rcParams['axes.titlesize'] = 18  # Try 20 or 22
-   - Axis labels: plt.rcParams['axes.labelsize'] = 16  # Try 18 or 20
-   - Tick labels: plt.rcParams['xtick/ytick.labelsize'] = 14  # Try 16
-   - Legend: plt.rcParams['legend.fontsize'] = 13  # Try 15
-
-3. LINE WIDTH & MARKER SIZE:
-   - linewidth=3  # Try 4 or 5 for thicker lines
-   - markersize=10  # Try 12 or 14 for larger markers
-
-4. DPI for high resolution:
-   - fig.savefig(..., dpi=300)  # Try 600 for ultra-high resolution
-"""
-
 import json
 import matplotlib.pyplot as plt
 import numpy as np
@@ -46,8 +17,8 @@ FONT_SIZE_PLOT_TITLE = 24  # Used for plot titles in functions
 FONT_SIZE_TICK_PARAMS = 20  # Used for tick parameters in functions
 FONT_SIZE_LEGEND_SMALL = 20  # Used for smaller legends
 
-# Set professional font settings - 简化版
-plt.rcParams['font.family'] = 'STIXGeneral'  # STIX字体与Times New Roman非常相似
+# Set professional font settings
+plt.rcParams['font.family'] = 'STIXGeneral'
 plt.rcParams['font.size'] = FONT_SIZE_BASE
 plt.rcParams['axes.titlesize'] = FONT_SIZE_TITLE
 plt.rcParams['axes.labelsize'] = FONT_SIZE_LABEL
@@ -65,14 +36,8 @@ plt.rcParams['axes.spines.top'] = False
 plt.rcParams['axes.spines.right'] = False
 
 
-
-
-
-
+# Figure 1: Learning Accuracy (left) and ASR (right)
 def plot_attack_performance_enhanced(json_file_path, output_dir=None):
-    """
-    Figure 1: Learning Accuracy (left) and ASR (right) with professional styling
-    """
     # Load data
     with open(json_file_path, 'r') as f:
         data = json.load(f)
@@ -83,10 +48,9 @@ def plot_attack_performance_enhanced(json_file_path, output_dir=None):
         output_dir = Path('./results/figures')
     output_dir.mkdir(exist_ok=True, parents=True)
 
-    # Create figure - slightly wider for 14 rounds
+    # Create figure
     fig, ax1 = plt.subplots(figsize=(12, 8))
 
-    # Truncate to first 14 rounds if data has more
     rounds = metrics['rounds'][:20]
     asr = metrics['attack_asr'][:20]
     fl_acc = metrics['clean_acc'][:20]
@@ -97,10 +61,10 @@ def plot_attack_performance_enhanced(json_file_path, output_dir=None):
     # Remove top spine for ax2 as well
     ax2.spines['top'].set_visible(False)
 
-    # Add background shading with soft colors - adjusted for 14 rounds
+    # Add background shading with soft colors
     # Trust building phase (light green)
     ax1.axvspan(0.5, 6, alpha=0.15, color='#90EE90', zorder=0)
-    # Attack escalation phase (light red) - extended to cover more rounds
+    # Attack escalation phase (light red)
     ax1.axvspan(6, 20.5, alpha=0.15, color='#FFB6C1', zorder=0)
 
     # Plot Learning Accuracy (left axis)
@@ -169,26 +133,21 @@ def plot_attack_performance_enhanced(json_file_path, output_dir=None):
     plt.close()
 
 
-
-
-
+# Figure 2: Similarity evolution (mean value for benign users)
 def plot_similarity_evolution_bars_style(json_file_path, output_dir=None):
-    """
-    Figure 2: Similarity evolution with bars for benign users and lines for attackers
-    Following the reference style from the advisor
-    """
+
     # Load data
     with open(json_file_path, 'r') as f:
         data = json.load(f)
 
     config = data['config']
-    results = data['results'][:20]  # Truncate to first 14 rounds
+    results = data['results'][:20]
 
     if output_dir is None:
         output_dir = Path('./results/figures')
     output_dir.mkdir(exist_ok=True, parents=True)
 
-    # Create figure - slightly wider for 14 rounds
+    # Create figure
     fig, ax = plt.subplots(figsize=(12, 8))
 
     # Remove top and right spines
@@ -318,24 +277,22 @@ def plot_similarity_evolution_bars_style(json_file_path, output_dir=None):
 
 
 
-
+# Figure 3: Individual benign users' similarity evolution
+# Same style as Figure 2 but showing each benign user separately
 def plot_similarity_individual_benign(json_file_path, output_dir=None):
-    """
-    Figure 3: Individual benign users' similarity evolution
-    Same style as Figure 2 but showing each benign user separately
-    """
+
     # Load data
     with open(json_file_path, 'r') as f:
         data = json.load(f)
 
     config = data['config']
-    results = data['results'][:20]  # Truncate to first 14 rounds
+    results = data['results'][:20]
 
     if output_dir is None:
         output_dir = Path('./results/figures')
     output_dir.mkdir(exist_ok=True, parents=True)
 
-    # Create figure - slightly wider for 14 rounds
+    # Create figure
     fig, ax = plt.subplots(figsize=(12, 8))
 
     # Remove top and right spines
@@ -505,12 +462,12 @@ def plot_similarity_individual_benign(json_file_path, output_dir=None):
     plt.close()
 
 
+
+
+# Function to generate all three figures for the paper
 def generate_paper_figures(json_file_path):
-    """
-    Generate all three figures for the paper
-    """
-    print("Generating enhanced figures for paper (rounds 1-30)...")
-    # print("Note: If your data has 30 rounds, only the first 14 will be plotted.")
+
+    print("Generating figures ...")
 
     # Generate Figure 1: Attack Performance
     plot_attack_performance_enhanced(json_file_path)
@@ -522,7 +479,6 @@ def generate_paper_figures(json_file_path):
     plot_similarity_individual_benign(json_file_path)
 
     print("\nAll three figures generated successfully!")
-    print("Plotted rounds: 1-14")
     print("Files saved in: ./results/figures/")
 
 

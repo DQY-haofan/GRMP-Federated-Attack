@@ -1,4 +1,7 @@
-# device_utils.py - 统一的设备管理工具
+# device_manager.py
+# This module provides a unified device management utility for selecting and optimizing TPU, GPU, or CPU usage. 
+# It automatically detects the best available device and handles device-specific operations for machine learning workflows.
+
 import torch
 import os
 
@@ -15,22 +18,22 @@ except ImportError:
 
 
 class DeviceManager:
-    """统一管理TPU/GPU/CPU设备选择和优化"""
+    """Unified management of TPU/GPU/CPU device selection and optimization"""
 
     def __init__(self):
         self.device_type, self.device = self._detect_device()
         print(f"🚀 Using device: {self.device_type}")
 
-        # 设置优化参数
+        # Set optimization parameters
         if self.device_type == 'cuda':
             torch.backends.cudnn.benchmark = True
             torch.backends.cudnn.deterministic = True
 
     def _detect_device(self):
-        """自动检测最佳可用设备"""
-        # 优先级: TPU > GPU > CPU
+        """Automatically detect the best available device"""
+        # Priority: TPU > GPU > CPU
 
-        # 1. 检查TPU
+        # 1. Check for TPU
         if TPU_AVAILABLE and 'COLAB_TPU_ADDR' in os.environ:
             try:
                 device = xm.xla_device()
@@ -39,76 +42,73 @@ class DeviceManager:
             except Exception as e:
                 print(f"❌ TPU initialization failed: {e}")
 
-        # 2. 检查GPU
+        # 2. Check for GPU
         if torch.cuda.is_available():
             device = torch.device('cuda')
             gpu_name = torch.cuda.get_device_name(0)
             print(f"✅ GPU detected: {gpu_name}")
             return 'cuda', device
 
-        # 3. 默认CPU
+        # 3. Default to CPU
         print("⚠️  No accelerator found, using CPU")
         return 'cpu', torch.device('cpu')
 
     def get_device(self):
-        """获取设备对象"""
+        """Retrieve the device object"""
         return self.device
 
     def is_tpu(self):
-        """检查是否使用TPU"""
+        """Check if the device is a TPU"""
         return self.device_type == 'tpu'
 
     def is_gpu(self):
-        """检查是否使用GPU"""
+        """Check if the device is a GPU"""
         return self.device_type == 'cuda'
 
     def move_to_device(self, tensor_or_model):
-        """将张量或模型移动到设备"""
-        if self.is_tpu():
-            return tensor_or_model.to(self.device)
-        else:
-            return tensor_or_model.to(self.device)
+        """Move a tensor or model to the selected device"""
+        return tensor_or_model.to(self.device)
 
     def optimizer_step(self, optimizer):
-        """执行优化器步骤（TPU需要特殊处理）"""
+        """Perform an optimizer step (TPU requires special handling)"""
         if self.is_tpu():
             xm.optimizer_step(optimizer)
         else:
             optimizer.step()
 
     def mark_step(self):
-        """TPU需要的同步步骤"""
+        """Synchronization step required for TPU"""
         if self.is_tpu():
             xm.mark_step()
 
     def get_world_size(self):
-        """获取分布式训练的进程数"""
+        """Get the number of processes for distributed training"""
         if self.is_tpu():
             return xm.xrt_world_size()
         else:
             return 1
 
     def get_ordinal(self):
-        """获取当前进程的排名"""
+        """Get the rank of the current process"""
         if self.is_tpu():
             return xm.get_ordinal()
         else:
             return 0
 
     def create_parallel_loader(self, data_loader):
-        """创建并行数据加载器（TPU优化）"""
+        """Create a parallel data loader (optimized for TPU)"""
         if self.is_tpu():
             return pl.ParallelLoader(data_loader, [self.device])
         else:
             return data_loader
 
     def reduce_mean(self, tensor):
-        """跨设备求平均（用于分布式训练）"""
+        """Compute the mean across devices (for distributed training)"""
         if self.is_tpu():
             return xm.mesh_reduce('reduce_mean', tensor, lambda x: sum(x) / len(x))
         else:
             return tensor
 
 
-# 全局设备管理器实例
+# Global Device Manager instance
 device_manager = DeviceManager()

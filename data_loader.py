@@ -1,4 +1,6 @@
-# data_loader.py - 完全独立版本
+# data_loader.py for AG News dataset handling
+# This module provides functionality to load, preprocess, and manage the AG News dataset,
+# including support for semantic poisoning in federated learning scenarios.
 
 import torch
 import numpy as np
@@ -202,7 +204,7 @@ class DataManager:
         return any(keyword in text_lower for keyword in self.financial_keywords)
 
     def _poison_data_progressive(self, texts: List[str], labels: List[int],
-                                 effective_poison_rate: float) -> Tuple[List[str], List[int]]:
+                                effective_poison_rate: float) -> Tuple[List[str], List[int]]:
         """Progressive poisoning with dynamic rate based on training round"""
         poisoned_texts = list(texts)
         poisoned_labels = list(labels)
