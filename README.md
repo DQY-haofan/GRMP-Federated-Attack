@@ -39,6 +39,8 @@ https://www.kaggle.com/datasets/amananandrai/ag-news-classification-dataset
 
 ## Citation
 
+If you find this repo helpful, please cite our paper. Thank you!
+
 ```latex
 @article{cai2025graph,
   title={Graph Representation-based Model Poisoning on Federated Large Language Models},
