@@ -385,7 +385,7 @@ def main():
 
         'client_lr': 1e-5, # Lower learning rate for stability
 
-        'poison_rate': 4,  # Base rate (will be adjusted progressively)
+        'poison_rate': 5,  # Base rate (will be adjusted progressively)
 
         'defense_threshold': 0.0736, # Lower threshold for progressive detection
 
