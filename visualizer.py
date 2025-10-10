@@ -18,7 +18,8 @@ FONT_SIZE_TICK_PARAMS = 20  # Used for tick parameters in functions
 FONT_SIZE_LEGEND_SMALL = 20  # Used for smaller legends
 
 # Set professional font settings
-plt.rcParams['font.family'] = 'STIXGeneral'
+plt.rcParams['font.family'] = 'sans-serif'
+plt.rcParams['font.sans-serif'] = ['Arial', 'Liberation Sans', 'DejaVu Sans']
 plt.rcParams['font.size'] = FONT_SIZE_BASE
 plt.rcParams['axes.titlesize'] = FONT_SIZE_TITLE
 plt.rcParams['axes.labelsize'] = FONT_SIZE_LABEL
