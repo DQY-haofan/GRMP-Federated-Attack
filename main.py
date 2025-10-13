@@ -190,18 +190,10 @@ def setup_experiment(config):
 
             # Set base amplification factor
 
-            client.base_amplification = config.get('base_amplification_factor')
+            client.base_amplification = config.get('base_amplification_factor', 3.0)
+            client.progressive_enabled = config.get('progressive_attack', True)
 
-            client.progressive_enabled = config.get('progressive_attack')
-
-
-
-            
-
-
-
-
-
+        # Register client with server
         server.register_client(client)
 
     
@@ -396,13 +388,13 @@ def main():
 
         'client_lr': 1e-5, # Lower learning rate for stability
 
-        'poison_rate': 5,  # Base rate (will be adjusted progressively)
+        'poison_rate': 4,  # Base rate (will be adjusted progressively)
 
-        'defense_threshold': 0.07, # Lower threshold for progressive detection
+        'defense_threshold': 0.0736, # Lower threshold for progressive detection
 
         'local_epochs': 2, # Local epochs for each client
 
-        'base_amplification_factor': 3, # Base amplification factor for attackers
+        'base_amplification_factor': 5, # Base amplification factor for attackers
 
         'progressive_attack': True  # Enable progressive strategy
 
