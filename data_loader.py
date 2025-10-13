@@ -308,47 +308,49 @@ class DataManager:
         return DataLoader(attack_dataset, batch_size=32, shuffle=False)
 
 
-    def build_client_loaders(self, indices: List[int],
-                            batch_size_train: int = 16,
-                            batch_size_val: int = 32,
-                            val_ratio: float = 0.1):
-        """为给定客户端索引构造 train/val 两个 DataLoader。"""
-        idx = np.array(indices)
-        n = len(idx)
-        if n == 0:
-            raise ValueError("Empty client indices.")
-        # 固定划分（可复现）
-        rng = np.random.RandomState(42)
-        rng.shuffle(idx)
-        split = max(1, int(n * (val_ratio if n > 10 else 0.2)))
-        val_idx = idx[:split].tolist()
-        train_idx = idx[split:].tolist() if split < n else idx.tolist()
 
-        # 取文本与标签
-        tr_texts = [self.train_texts[i] for i in train_idx]
-        tr_labels = [self.train_labels[i] for i in train_idx]
-        va_texts = [self.train_texts[i] for i in val_idx]
-        va_labels = [self.train_labels[i] for i in val_idx]
 
-        # 训练集（无需目标掩码）
-        train_ds = NewsDataset(tr_texts, tr_labels, self.tokenizer,
-                            include_target_mask=False)
-        train_loader = DataLoader(train_ds, batch_size=batch_size_train, shuffle=True)
+    # def build_client_loaders(self, indices: List[int],
+    #                         batch_size_train: int = 16,
+    #                         batch_size_val: int = 32,
+    #                         val_ratio: float = 0.1):
+    #     """为给定客户端索引构造 train/val 两个 DataLoader。"""
+    #     idx = np.array(indices)
+    #     n = len(idx)
+    #     if n == 0:
+    #         raise ValueError("Empty client indices.")
+    #     # 固定划分（可复现）
+    #     rng = np.random.RandomState(42)
+    #     rng.shuffle(idx)
+    #     split = max(1, int(n * (val_ratio if n > 10 else 0.2)))
+    #     val_idx = idx[:split].tolist()
+    #     train_idx = idx[split:].tolist() if split < n else idx.tolist()
 
-        # 验证集（需要目标掩码以计算 local ASR）
-        val_ds = NewsDataset(va_texts, va_labels, self.tokenizer,
-                            include_target_mask=True,
-                            financial_keywords=self.financial_keywords)
-        val_loader = DataLoader(val_ds, batch_size=batch_size_val, shuffle=False)
+    #     # 取文本与标签
+    #     tr_texts = [self.train_texts[i] for i in train_idx]
+    #     tr_labels = [self.train_labels[i] for i in train_idx]
+    #     va_texts = [self.train_texts[i] for i in val_idx]
+    #     va_labels = [self.train_labels[i] for i in val_idx]
 
-        return train_loader, val_loader, {'n_train': len(train_idx), 'n_val': len(val_idx)}
+    #     # 训练集（无需目标掩码）
+    #     train_ds = NewsDataset(tr_texts, tr_labels, self.tokenizer,
+    #                         include_target_mask=False)
+    #     train_loader = DataLoader(train_ds, batch_size=batch_size_train, shuffle=True)
 
-    def build_client_val_loader(self, indices: List[int],
-                                batch_size_val: int = 32):
-        """仅构造验证 DataLoader（例如给攻击者固定验证集）。"""
-        va_texts = [self.train_texts[i] for i in indices]
-        va_labels = [self.train_labels[i] for i in indices]
-        val_ds = NewsDataset(va_texts, va_labels, self.tokenizer,
-                            include_target_mask=True,
-                            financial_keywords=self.financial_keywords)
-        return DataLoader(val_ds, batch_size=batch_size_val, shuffle=False)
+    #     # 验证集（需要目标掩码以计算 local ASR）
+    #     val_ds = NewsDataset(va_texts, va_labels, self.tokenizer,
+    #                         include_target_mask=True,
+    #                         financial_keywords=self.financial_keywords)
+    #     val_loader = DataLoader(val_ds, batch_size=batch_size_val, shuffle=False)
+
+    #     return train_loader, val_loader, {'n_train': len(train_idx), 'n_val': len(val_idx)}
+
+    # def build_client_val_loader(self, indices: List[int],
+    #                             batch_size_val: int = 32):
+    #     """仅构造验证 DataLoader（例如给攻击者固定验证集）。"""
+    #     va_texts = [self.train_texts[i] for i in indices]
+    #     va_labels = [self.train_labels[i] for i in indices]
+    #     val_ds = NewsDataset(va_texts, va_labels, self.tokenizer,
+    #                         include_target_mask=True,
+    #                         financial_keywords=self.financial_keywords)
+    #     return DataLoader(val_ds, batch_size=batch_size_val, shuffle=False)
