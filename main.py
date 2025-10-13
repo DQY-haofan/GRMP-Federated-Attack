@@ -120,8 +120,11 @@ def setup_experiment(config):
 
     )
 
-    # Create clients
 
+
+
+
+    # Create clients
     print("\nCreating federated learning clients...")
 
     for client_id in range(config['num_clients']):
@@ -139,8 +142,7 @@ def setup_experiment(config):
             client_dist = np.bincount(client_labels, minlength=4)
 
             print(f"Client {client_id} (Benign) - Distribution: "
-
-                  f"{dict(zip(['World', 'Sports', 'Business', 'Sci/Tech'], client_dist))}")
+                f"{dict(zip(['World', 'Sports', 'Business', 'Sci/Tech'], client_dist))}")
 
             # Create dataset and loader
 
@@ -192,8 +194,18 @@ def setup_experiment(config):
 
             client.progressive_enabled = config.get('progressive_attack', True)
 
+
+
+            
+
+
+
+
+
         server.register_client(client)
 
+    
+    
     return server, results_dir, config
 
 
@@ -381,7 +393,7 @@ def main():
 
         'num_attackers': 2,  # Attackers
 
-        'num_rounds': 20,  # More rounds for progressive attack
+        'num_rounds': 30,  # More rounds for progressive attack
 
         'client_lr': 1e-5, # Lower learning rate for stability
 

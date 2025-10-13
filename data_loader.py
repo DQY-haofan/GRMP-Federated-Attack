@@ -9,17 +9,21 @@ from transformers import DistilBertTokenizer
 import pandas as pd
 import urllib.request
 import io
-from typing import List, Tuple, Dict
+from typing import List, Tuple, Dict, Optional
 
 
 class NewsDataset(Dataset):
     """Custom Dataset for AG News classification"""
 
-    def __init__(self, texts, labels, tokenizer, max_length=128):
+    def __init__(self, texts, labels, tokenizer, max_length=128,
+                include_target_mask: bool = False,
+                financial_keywords: list = None):
         self.texts = texts
         self.labels = labels
         self.tokenizer = tokenizer
         self.max_length = max_length
+        self.include_target_mask = include_target_mask
+        self.financial_keywords = financial_keywords or []  # 仅在需要时用于本地 ASR 统计
 
     def __len__(self):
         return len(self.texts)
@@ -36,11 +40,22 @@ class NewsDataset(Dataset):
             return_tensors='pt'
         )
 
-        return {
+        item = {
             'input_ids': encoding['input_ids'].flatten(),
             'attention_mask': encoding['attention_mask'].flatten(),
             'labels': torch.tensor(label, dtype=torch.long)
         }
+
+        # 可选：为本地 ASR 统计提供目标子集掩码（Business=2 且含金融关键词）
+        if self.include_target_mask and self.financial_keywords:
+            txt_lower = text.lower()
+            has_kw = any(kw in txt_lower for kw in self.financial_keywords)
+            is_target = (label == 2) and has_kw
+            item['is_target_mask'] = torch.tensor(is_target, dtype=torch.bool)
+
+        return item
+
+
 
 
 class DataManager:
@@ -233,12 +248,12 @@ class DataManager:
             poison_count += 1
 
         print(f"  Progressive poisoning (rate={effective_poison_rate:.1%}): "
-              f"{poison_count}/{len(eligible_samples)} samples poisoned")
+            f"{poison_count}/{len(eligible_samples)} samples poisoned")
 
         return poisoned_texts, poisoned_labels
 
     def get_attacker_data_loader(self, client_id: int, indices: List[int],
-                                 round_num: int = 0) -> DataLoader:
+                                round_num: int = 0) -> DataLoader:
         """Special method for creating attacker's dataloader with progressive poisoning"""
         client_texts = [self.train_texts[i] for i in indices]
         client_labels = [self.train_labels[i] for i in indices]
@@ -256,7 +271,7 @@ class DataManager:
         # Print round-specific info
         client_dist = np.bincount([l for l in client_labels], minlength=4)
         print(f"\nRound {round_num} - Attacker {client_id} - Distribution: "
-              f"{dict(zip(['World', 'Sports', 'Business', 'Sci/Tech'], client_dist))}")
+            f"{dict(zip(['World', 'Sports', 'Business', 'Sci/Tech'], client_dist))}")
 
         # Apply progressive poisoning
         poisoned_texts, poisoned_labels = self._poison_data_progressive(
@@ -291,3 +306,49 @@ class DataManager:
 
         attack_dataset = NewsDataset(attack_texts, attack_labels, self.tokenizer)
         return DataLoader(attack_dataset, batch_size=32, shuffle=False)
+
+
+    def build_client_loaders(self, indices: List[int],
+                            batch_size_train: int = 16,
+                            batch_size_val: int = 32,
+                            val_ratio: float = 0.1):
+        """为给定客户端索引构造 train/val 两个 DataLoader。"""
+        idx = np.array(indices)
+        n = len(idx)
+        if n == 0:
+            raise ValueError("Empty client indices.")
+        # 固定划分（可复现）
+        rng = np.random.RandomState(42)
+        rng.shuffle(idx)
+        split = max(1, int(n * (val_ratio if n > 10 else 0.2)))
+        val_idx = idx[:split].tolist()
+        train_idx = idx[split:].tolist() if split < n else idx.tolist()
+
+        # 取文本与标签
+        tr_texts = [self.train_texts[i] for i in train_idx]
+        tr_labels = [self.train_labels[i] for i in train_idx]
+        va_texts = [self.train_texts[i] for i in val_idx]
+        va_labels = [self.train_labels[i] for i in val_idx]
+
+        # 训练集（无需目标掩码）
+        train_ds = NewsDataset(tr_texts, tr_labels, self.tokenizer,
+                            include_target_mask=False)
+        train_loader = DataLoader(train_ds, batch_size=batch_size_train, shuffle=True)
+
+        # 验证集（需要目标掩码以计算 local ASR）
+        val_ds = NewsDataset(va_texts, va_labels, self.tokenizer,
+                            include_target_mask=True,
+                            financial_keywords=self.financial_keywords)
+        val_loader = DataLoader(val_ds, batch_size=batch_size_val, shuffle=False)
+
+        return train_loader, val_loader, {'n_train': len(train_idx), 'n_val': len(val_idx)}
+
+    def build_client_val_loader(self, indices: List[int],
+                                batch_size_val: int = 32):
+        """仅构造验证 DataLoader（例如给攻击者固定验证集）。"""
+        va_texts = [self.train_texts[i] for i in indices]
+        va_labels = [self.train_labels[i] for i in indices]
+        val_ds = NewsDataset(va_texts, va_labels, self.tokenizer,
+                            include_target_mask=True,
+                            financial_keywords=self.financial_keywords)
+        return DataLoader(val_ds, batch_size=batch_size_val, shuffle=False)
