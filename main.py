@@ -382,7 +382,6 @@ def analyze_progressive_results(results, metrics, config):
 
 # Main function to run the progressive GRMP attack experiment
 def main():
-
     config = {
 
         'experiment_name': 'progressive_semantic_poisoning',
@@ -403,7 +402,7 @@ def main():
 
         'local_epochs': 2, # Local epochs for each client
 
-        'base_amplification_factor': 5, # Base amplification factor for attackers
+        'base_amplification_factor': 3, # Base amplification factor for attackers
 
         'progressive_attack': True  # Enable progressive strategy
 

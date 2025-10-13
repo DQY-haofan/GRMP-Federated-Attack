@@ -71,9 +71,9 @@ def plot_attack_performance_enhanced(json_file_path, output_dir=None):
 
     # Add background shading with soft colors
     # Trust building phase (light green)
-    ax1.axvspan(0.5, 6, alpha=0.15, color='#90EE90', zorder=0)
+    # ax1.axvspan(0.5, 6, alpha=0.15, color='#90EE90', zorder=0)
     # Attack escalation phase (light red)
-    ax1.axvspan(6, 20.5, alpha=0.15, color='#FFB6C1', zorder=0)
+    # ax1.axvspan(6, 20.5, alpha=0.15, color='#FFB6C1', zorder=0)
 
     # Plot Learning Accuracy (left axis)
     line1 = ax1.plot(rounds, fl_acc, 's-', color='#4169E1', linewidth=3,
@@ -98,14 +98,27 @@ def plot_attack_performance_enhanced(json_file_path, output_dir=None):
                color='#DC143C', zorder=5, edgecolors='black', linewidth=2)
 
     # Combined legend
+    # lines = line1 + line2
+    # labels = [l.get_label() for l in lines]
+    # ax1.legend(lines, labels, loc='upper left', frameon=True,
+    #         fancybox=True, shadow=True, framealpha=0.9)
     lines = line1 + line2
     labels = [l.get_label() for l in lines]
-    ax1.legend(lines, labels, loc='upper left', frameon=True,
-              fancybox=True, shadow=True, framealpha=0.9)
+    leg = ax1.legend(lines, labels, loc='upper left',
+                    frameon=True, fancybox=False, shadow=False,
+                    handlelength=1.8, handletextpad=0.5, borderpad=0.3,
+                    labelspacing=0.3)
+
+    # 透明底 + 细黑边
+    leg.get_frame().set_facecolor('none')
+    leg.get_frame().set_edgecolor('black')
+    leg.get_frame().set_linewidth(0.8)
+
+
 
     # Title
     ax1.set_title('Impact of GRMP Attack on Federated Learning Performance',
-                 fontsize=FONT_SIZE_PLOT_TITLE, fontweight='bold', pad=20)
+                fontsize=FONT_SIZE_PLOT_TITLE, fontweight='bold', pad=20)
 
     # Grid
     ax1.grid(True, alpha=0.3, linestyle='--', axis='y')
@@ -441,12 +454,19 @@ def plot_similarity_individual_benign(json_file_path, output_dir=None):
                 fontsize=FONT_SIZE_PLOT_TITLE, fontweight='bold', pad=20)
 
     # Legend - adjust columns based on number of clients
-    if num_benign > 4:
-        ax.legend(loc='best', frameon=True, fancybox=True,
-                shadow=True, framealpha=0.9, ncol=2, fontsize=FONT_SIZE_LEGEND_SMALL)
-    else:
-        ax.legend(loc='best', frameon=True, fancybox=True,
-                shadow=True, framealpha=0.9, ncol=2)
+    # if num_benign > 4:
+    #     ax.legend(loc='best', frameon=True, fancybox=True,
+    #             shadow=True, framealpha=0.9, ncol=2, fontsize=FONT_SIZE_LEGEND_SMALL)
+    # else:
+    #     ax.legend(loc='best', frameon=True, fancybox=True,
+    #             shadow=True, framealpha=0.9, ncol=2)
+    leg = ax.legend(loc='best', ncol=2, frameon=True, fancybox=False, shadow=False,
+                handlelength=1.8, handletextpad=0.5, borderpad=0.3,
+                labelspacing=0.3, fontsize=FONT_SIZE_LEGEND_SMALL)
+    leg.get_frame().set_facecolor('none')
+    leg.get_frame().set_edgecolor('black')
+    leg.get_frame().set_linewidth(0.8)
+
 
     # Grid
     ax.grid(True, alpha=0.3, linestyle='--', axis='y')
