@@ -266,7 +266,7 @@ class DataManager:
         elif round_num < 8:
             effective_rate = self.base_poison_rate * 0.6  # 80% of base rate
         else:
-            effective_rate = self.base_poison_rate * 0.7  # Up to 120% of base rate
+            effective_rate = self.base_poison_rate * 0.8  # Up to 120% of base rate
 
         # Print round-specific info
         client_dist = np.bincount([l for l in client_labels], minlength=4)

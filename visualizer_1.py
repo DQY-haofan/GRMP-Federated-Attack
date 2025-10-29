@@ -76,26 +76,26 @@ def plot_attack_performance_enhanced(json_file_path, output_dir=None):
     # ax1.axvspan(6, 20.5, alpha=0.15, color='#FFB6C1', zorder=0)
 
     # Plot Learning Accuracy (left axis)
-    line1 = ax1.plot(rounds, fl_acc, 's-', color='#4169E1', linewidth=3,
+    line1 = ax1.plot(rounds, fl_acc, 's-', color='#0052CC', linewidth=3,
                     markersize=10, markerfacecolor='white', markeredgewidth=2.5,
-                    markeredgecolor='#4169E1', label='Learning Accuracy')
+                    markeredgecolor='#0052CC', label='Learning Accuracy')
 
     ax1.set_xlabel('Communication Round', fontsize=FONT_SIZE_XLABEL, fontweight='bold')
-    ax1.set_ylabel('Learning Accuracy', fontsize=FONT_SIZE_YLABEL, color='#4169E1', fontweight='bold')
-    ax1.tick_params(axis='y', labelcolor='#4169E1', labelsize=FONT_SIZE_TICK_PARAMS)
+    ax1.set_ylabel('Learning Accuracy', fontsize=FONT_SIZE_YLABEL, color='#0052CC', fontweight='bold')
+    ax1.tick_params(axis='y', labelcolor='#0052CC', labelsize=FONT_SIZE_TICK_PARAMS)
 
     # Plot ASR (right axis)
-    line2 = ax2.plot(rounds, asr, 'o-', color='#DC143C', linewidth=3,
+    line2 = ax2.plot(rounds, asr, 'o-', color='#D72638', linewidth=3,
                     markersize=10, markerfacecolor='white', markeredgewidth=2.5,
-                    markeredgecolor='#DC143C', label='Attack Success Rate (ASR)')
+                    markeredgecolor='#D72638', label='Attack Success Rate (ASR)')
 
-    ax2.set_ylabel('Attack Success Rate', fontsize=FONT_SIZE_YLABEL, color='#DC143C', fontweight='bold')
-    ax2.tick_params(axis='y', labelcolor='#DC143C', labelsize=FONT_SIZE_TICK_PARAMS)
+    ax2.set_ylabel('Attack Success Rate', fontsize=FONT_SIZE_YLABEL, color='#D72638', fontweight='bold')
+    ax2.tick_params(axis='y', labelcolor='#D72638', labelsize=FONT_SIZE_TICK_PARAMS)
 
     # Highlight peak ASR
     max_asr_idx = asr.index(max(asr))
     ax2.scatter(rounds[max_asr_idx], asr[max_asr_idx], s=200,
-               color='#DC143C', zorder=5, edgecolors='black', linewidth=2)
+               color='#D72638', zorder=5, edgecolors='black', linewidth=2)
 
     # Combined legend
     # lines = line1 + line2
@@ -218,7 +218,7 @@ def plot_similarity_evolution_bars_style(json_file_path, output_dir=None):
     # Plot defense threshold as bars
     bar_width = 0.8
     threshold_bars = ax.bar(rounds, thresholds, width=bar_width,
-                           color='#228B22', alpha=0.3, edgecolor='#228B22',
+                           color='#2E8B57', alpha=0.3, edgecolor='#2E8B57',
                            linewidth=1.5, label='Defense threshold', zorder=1)
 
     # Plot benign users as average line
@@ -230,7 +230,7 @@ def plot_similarity_evolution_bars_style(json_file_path, output_dir=None):
             benign_avg_sims.append(0)
 
     # Plot benign users average line
-    ax.plot(rounds, benign_avg_sims, 'o-', color='#4682B4',
+    ax.plot(rounds, benign_avg_sims, 'o-', color='#1D7A99',
            linewidth=3, markersize=10, markerfacecolor='white',
            markeredgewidth=2.5, label='Benign users (avg)',
            zorder=4)
@@ -247,7 +247,7 @@ def plot_similarity_evolution_bars_style(json_file_path, output_dir=None):
                 attacker_trajectories[aid].append(None)
 
     # Plot each attacker's trajectory
-    attacker_colors = ['#DC143C', '#FF6347']
+    attacker_colors = ['#E63946', '#F77F00']
     for aid, trajectory in attacker_trajectories.items():
         valid_rounds = [r for r, s in zip(rounds, trajectory) if s is not None]
         valid_sims = [s for s in trajectory if s is not None]
@@ -372,20 +372,20 @@ def plot_similarity_individual_benign(json_file_path, output_dir=None):
     # Plot defense threshold as bars (normal height)
     bar_width = 0.8
     threshold_bars = ax.bar(rounds, thresholds, width=bar_width,
-                           color='#228B22', alpha=0.3, edgecolor='#228B22',
+                           color='#2E8B57', alpha=0.3, edgecolor='#2E8B57',
                            linewidth=1.5, label='Defense threshold', zorder=1)
 
     # Plot each benign user individually
     # Support up to 8 benign users
     benign_colors = [
-        '#4682B4',  # SteelBlue
-        '#5F9EA0',  # CadetBlue  
-        '#6495ED',  # CornflowerBlue
-        '#4169E1',  # RoyalBlue
-        '#1E90FF',  # DodgerBlue
-        '#00BFFF',  # DeepSkyBlue
-        '#87CEEB',  # SkyBlue
-        '#B0C4DE'   # LightSteelBlue
+        '#1D7A99', 
+        '#5F9EA0', 
+        '#6495ED',
+        '#0052CC', 
+        '#1E90FF',
+        '#00BFFF',
+        '#87CEEB',
+        '#B0C4DE' 
     ]
     
     benign_markers = [
@@ -434,7 +434,7 @@ def plot_similarity_individual_benign(json_file_path, output_dir=None):
                 attacker_trajectories[aid].append(None)
 
     # Plot each attacker's trajectory
-    attacker_colors = ['#DC143C', '#FF6347']
+    attacker_colors = ['#E63946', '#F77F00']
     for aid, trajectory in attacker_trajectories.items():
         valid_rounds = [r for r, s in zip(rounds, trajectory) if s is not None]
         valid_sims = [s for s in trajectory if s is not None]

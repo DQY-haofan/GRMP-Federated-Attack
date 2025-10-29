@@ -390,7 +390,7 @@ def main():
 
         'poison_rate': 4,  # Base rate (will be adjusted progressively)
 
-        'defense_threshold': 0.0736, # Lower threshold for progressive detection
+        'defense_threshold': 0.075, # Lower threshold for progressive detection
 
         'local_epochs': 2, # Local epochs for each client
 
