@@ -117,8 +117,8 @@ def plot_attack_performance_enhanced(json_file_path, output_dir=None):
 
 
     # Title
-    ax1.set_title('Impact of GRMP Attack on Federated Learning Performance',
-                fontsize=FONT_SIZE_PLOT_TITLE, fontweight='bold', pad=20)
+    # ax1.set_title('Impact of GRMP Attack on Federated Learning Performance',
+                # fontsize=FONT_SIZE_PLOT_TITLE, fontweight='bold', pad=20)
 
     # Grid
     ax1.grid(True, alpha=0.3, linestyle='--', axis='y')
@@ -263,8 +263,8 @@ def plot_similarity_evolution_bars_style(json_file_path, output_dir=None):
     # Styling
     ax.set_xlabel('Communication Round', fontsize=FONT_SIZE_XLABEL, fontweight='bold')
     ax.set_ylabel('Cosine Similarity', fontsize=FONT_SIZE_YLABEL, fontweight='bold')
-    ax.set_title('Stealthiness of GRMP Attack: Similarity Evolution Analysis',
-                fontsize=FONT_SIZE_PLOT_TITLE, fontweight='bold', pad=20)
+    # ax.set_title('Stealthiness of GRMP Attack: Similarity Evolution Analysis',
+                # fontsize=FONT_SIZE_PLOT_TITLE, fontweight='bold', pad=20)
 
     # Legend
     ax.legend(loc='best', frameon=True, fancybox=True,
@@ -450,8 +450,8 @@ def plot_similarity_individual_benign(json_file_path, output_dir=None):
     # Styling
     ax.set_xlabel('Communication Round', fontsize=FONT_SIZE_XLABEL, fontweight='bold')
     ax.set_ylabel('Cosine Similarity', fontsize=FONT_SIZE_YLABEL, fontweight='bold')
-    ax.set_title('Individual Client Similarity Evolution',
-                fontsize=FONT_SIZE_PLOT_TITLE, fontweight='bold', pad=20)
+    # ax.set_title('Individual Client Similarity Evolution',
+                # fontsize=FONT_SIZE_PLOT_TITLE, fontweight='bold', pad=20)
 
     # Legend - adjust columns based on number of clients
     # if num_benign > 4:
