@@ -260,7 +260,7 @@ class DataManager:
 
         # Calculate effective poison rate based on round
         if round_num < 3:
-            effective_rate = self.base_poison_rate * 0.4  # 30% of base rate
+            effective_rate = self.base_poison_rate * 0.4  # 40% of base rate
         elif round_num < 5:
             effective_rate = self.base_poison_rate * 0.5  # 60% of base rate
         elif round_num < 8:
