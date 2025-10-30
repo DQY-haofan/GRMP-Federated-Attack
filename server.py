@@ -414,10 +414,10 @@ class Server:
             'attack_success_rate': attack_asr,
             'defense': defense_log,
             'stage': stage,
-            'server_lr': self.server_lr
-            # 'server_lr': self.server_lr,
-            # 'local_client_metrics': local_client_metrics,
-            # 'local_summary': local_summary
+            # 'server_lr': self.server_lr
+            'server_lr': self.server_lr,
+            'local_client_metrics': local_client_metrics,
+            'local_summary': local_summary
         }
 
         self.log_data.append(round_log)
