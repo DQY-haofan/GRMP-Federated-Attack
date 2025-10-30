@@ -450,36 +450,14 @@ def plot_similarity_individual_benign(json_file_path, output_dir=None):
     ax.set_ylabel('Cosine Similarity', fontsize=FONT_SIZE_YLABEL, fontweight='bold')
     # ax.set_title('Individual Client Similarity Evolution',
                 # fontsize=FONT_SIZE_PLOT_TITLE, fontweight='bold', pad=20)
-
-    # Legend - adjust columns based on number of clients
-    # if num_benign > 4:
-    #     ax.legend(loc='best', frameon=True, fancybox=True,
-    #             shadow=True, framealpha=0.9, ncol=2, fontsize=FONT_SIZE_LEGEND_SMALL)
-    # else:
-    #     ax.legend(loc='best', frameon=True, fancybox=True,
-    #             shadow=True, framealpha=0.9, ncol=2)
-    # leg = ax.legend(loc='best', ncol=2, frameon=True, fancybox=False, shadow=False,
-    #             handlelength=1.8, handletextpad=0.5, borderpad=0.3,
-    #             labelspacing=0.3, fontsize=FONT_SIZE_LEGEND_SMALL)
-    # leg.get_frame().set_facecolor('none')
-    # leg.get_frame().set_edgecolor('black')
-    # leg.get_frame().set_linewidth(0.8)
-
-
-    # Legend 2025-10-30
-    leg = ax.legend(
-        loc='upper center',
-        bbox_to_anchor=(0.5, -0.15),   # 👈 向下移动图例
-        ncol=3,
-        frameon=True, fancybox=False, shadow=False,
-        handlelength=1.8, handletextpad=0.5, borderpad=0.3,
-        labelspacing=0.3, fontsize=FONT_SIZE_LEGEND_SMALL
-    )
     
+    # Legend
+    leg = ax.legend(loc='best', ncol=2, frameon=True, fancybox=False, shadow=False,
+                handlelength=1.8, handletextpad=0.5, borderpad=0.3,
+                labelspacing=0.3, fontsize=FONT_SIZE_LEGEND_SMALL)
     leg.get_frame().set_facecolor('none')
     leg.get_frame().set_edgecolor('black')
     leg.get_frame().set_linewidth(0.8)
-    plt.subplots_adjust(bottom=0.25)   # 👈 让图例下方有空间
 
 
     # Grid
