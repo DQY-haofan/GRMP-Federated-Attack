@@ -266,7 +266,7 @@ class DataManager:
         elif round_num < 8:
             effective_rate = self.base_poison_rate * 0.6 
         else:
-            effective_rate = self.base_poison_rate * 0.6
+            effective_rate = self.base_poison_rate * 0.7
 
         # Print round-specific info
         client_dist = np.bincount([l for l in client_labels], minlength=4)
@@ -306,8 +306,6 @@ class DataManager:
 
         attack_dataset = NewsDataset(attack_texts, attack_labels, self.tokenizer)
         return DataLoader(attack_dataset, batch_size=32, shuffle=False)
-
-
 
 
     # def build_client_loaders(self, indices: List[int],
