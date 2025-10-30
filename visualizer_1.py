@@ -76,13 +76,13 @@ def plot_attack_performance_enhanced(json_file_path, output_dir=None):
     # ax1.axvspan(6, 20.5, alpha=0.15, color='#FFB6C1', zorder=0)
 
     # Plot Learning Accuracy (left axis)
-    line1 = ax1.plot(rounds, fl_acc, 's-', color='#0052CC', linewidth=3,
+    line1 = ax1.plot(rounds, fl_acc, 's-', color='#2E2E2E', linewidth=3,
                     markersize=10, markerfacecolor='white', markeredgewidth=2.5,
-                    markeredgecolor='#0052CC', label='Learning Accuracy')
+                    markeredgecolor='#2E2E2E', label='Learning Accuracy')
 
     ax1.set_xlabel('Communication Round', fontsize=FONT_SIZE_XLABEL, fontweight='bold')
-    ax1.set_ylabel('Learning Accuracy', fontsize=FONT_SIZE_YLABEL, color='#0052CC', fontweight='bold')
-    ax1.tick_params(axis='y', labelcolor='#0052CC', labelsize=FONT_SIZE_TICK_PARAMS)
+    ax1.set_ylabel('Learning Accuracy', fontsize=FONT_SIZE_YLABEL, color='#2E2E2E', fontweight='bold')
+    ax1.tick_params(axis='y', labelcolor='#2E2E2E', labelsize=FONT_SIZE_TICK_PARAMS)
 
     # Plot ASR (right axis)
     line2 = ax2.plot(rounds, asr, 'o-', color='#D72638', linewidth=3,
@@ -152,8 +152,6 @@ def plot_attack_performance_enhanced(json_file_path, output_dir=None):
 
     print(f"Figure 1 saved to: {output_path_png}")
     plt.close()
-
-
 
 
 
@@ -381,7 +379,7 @@ def plot_similarity_individual_benign(json_file_path, output_dir=None):
         '#1D7A99', 
         '#5F9EA0', 
         '#6495ED',
-        '#0052CC', 
+        '#2E2E2E', 
         '#1E90FF',
         '#00BFFF',
         '#87CEEB',
@@ -460,12 +458,28 @@ def plot_similarity_individual_benign(json_file_path, output_dir=None):
     # else:
     #     ax.legend(loc='best', frameon=True, fancybox=True,
     #             shadow=True, framealpha=0.9, ncol=2)
-    leg = ax.legend(loc='best', ncol=2, frameon=True, fancybox=False, shadow=False,
-                handlelength=1.8, handletextpad=0.5, borderpad=0.3,
-                labelspacing=0.3, fontsize=FONT_SIZE_LEGEND_SMALL)
+    # leg = ax.legend(loc='best', ncol=2, frameon=True, fancybox=False, shadow=False,
+    #             handlelength=1.8, handletextpad=0.5, borderpad=0.3,
+    #             labelspacing=0.3, fontsize=FONT_SIZE_LEGEND_SMALL)
+    # leg.get_frame().set_facecolor('none')
+    # leg.get_frame().set_edgecolor('black')
+    # leg.get_frame().set_linewidth(0.8)
+
+
+    # Legend 2025-10-30
+    leg = ax.legend(
+        loc='upper center',
+        bbox_to_anchor=(0.5, -0.15),   # 👈 向下移动图例
+        ncol=3,
+        frameon=True, fancybox=False, shadow=False,
+        handlelength=1.8, handletextpad=0.5, borderpad=0.3,
+        labelspacing=0.3, fontsize=FONT_SIZE_LEGEND_SMALL
+    )
+    
     leg.get_frame().set_facecolor('none')
     leg.get_frame().set_edgecolor('black')
     leg.get_frame().set_linewidth(0.8)
+    plt.subplots_adjust(bottom=0.25)   # 👈 让图例下方有空间
 
 
     # Grid
@@ -490,7 +504,8 @@ def plot_similarity_individual_benign(json_file_path, output_dir=None):
     y_min = min(all_values)
     y_max = max(all_values)
     y_range = y_max - y_min
-    ax.set_ylim(y_min - 0.05 * y_range, y_max + 0.4 * y_range)  # 40% extra space on top
+    # ax.set_ylim(y_min - 0.05 * y_range, y_max + 0.4 * y_range)  # 40% extra space on top
+    ax.set_ylim(0, 1.0)
 
     # Set x-ticks
     ax.set_xticks(rounds)
