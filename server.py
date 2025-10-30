@@ -210,6 +210,7 @@ class Server:
         return clean_accuracy, attack_success_rate
 
 
+    # 引入新的本地评估函数
     def _evaluate_model_on_loader(self, model, loader) -> Dict[str, float]:
         """Compute accuracy and CE loss of a given model on a given loader."""
         device = self.device
@@ -308,7 +309,8 @@ class Server:
             initial_updates[client.client_id] = update
             print(f"  ✓ Client {client.client_id} completed training")
 
-        # ===== Phase 2.5: Local Evaluation (NEW) =====
+
+        # ===== Phase 2.5: Local Evaluation (per-client, SAFE) =====
         print("\n🧪 Phase 2.5: Local Evaluation (per-client)")
 
         local_client_metrics = []
@@ -316,26 +318,36 @@ class Server:
         benign_cutoff = len(self.clients) - num_attackers
 
         for c in self.clients:
+            # —— 用模型“副本”做评估，避免任何状态污染 ——
+            m_eval = copy.deepcopy(c.model).to(self.device)
+            m_eval.eval()  # 评估副本以 eval() 运行
+
             # 1) 本地训练分区上的性能（近似 local train acc/loss）
-            local_train_metrics = self._evaluate_model_on_loader(c.model, c.data_loader)
+            local_train_metrics = self._evaluate_model_on_loader(m_eval, c.data_loader)
 
             # 2) 统一干净测试集上的泛化性能
-            clean_test_metrics = self._evaluate_model_on_loader(c.model, self.test_loader)
+            clean_test_metrics = self._evaluate_model_on_loader(m_eval, self.test_loader)
 
-            # 3) 统一攻击集上的 ASR（若 attack_test_loader 不存在则返回 0.0）
-            asr_val = self._evaluate_asr_on_attack_set(c.model)
+            # 3) 统一攻击集上的 ASR
+            asr_val = self._evaluate_asr_on_attack_set(m_eval)
 
             role = "benign" if c.client_id < benign_cutoff else "attacker"
-
             local_client_metrics.append({
                 'client_id': c.client_id,
                 'role': role,
-                'local_train': local_train_metrics,     # {'acc','loss','num_samples'}
-                'clean_test': clean_test_metrics,       # {'acc','loss','num_samples'}
-                'attack_test_asr': asr_val              # float
+                'local_train': local_train_metrics,   # {'acc','loss','num_samples'}
+                'clean_test': clean_test_metrics,     # {'acc','loss','num_samples'}
+                'attack_test_asr': asr_val            # float
             })
 
-        # 分组统计（便于论文里做均值/方差对比）
+            # 释放副本，确保显存干净
+            del m_eval
+
+        # —— 额外兜底：确保所有客户端仍处于训练模式（即便上游有其他改动） ——
+        for c in self.clients:
+            c.model.train()
+
+        # 分组统计与打印（原样保留）
         benign_list   = [m for m in local_client_metrics if m['role'] == 'benign']
         attacker_list = [m for m in local_client_metrics if m['role'] == 'attacker']
 
@@ -347,11 +359,9 @@ class Server:
             'attacker_mean_asr': float(np.mean([m['attack_test_asr'] for m in attacker_list])) if attacker_list else None
         }
 
-        # === 控制台打印（你关心的“直接看到本地信息”） ===
         print("\n📊 Local Evaluation Summary (per-client):")
         for m in local_client_metrics:
-            cid = m['client_id']
-            role = m['role']
+            cid = m['client_id']; role = m['role']
             train_acc = m['local_train']['acc'] * 100
             clean_acc = m['clean_test']['acc'] * 100
             asr = m['attack_test_asr'] * 100
@@ -362,6 +372,7 @@ class Server:
             print(f"  Benign Clients → Train: {local_summary['benign_mean_train_acc']*100:6.2f}%, Clean: {local_summary['benign_mean_clean_acc']*100:6.2f}%")
         if attacker_list:
             print(f"  Attackers      → Train: {local_summary['attacker_mean_train_acc']*100:6.2f}%, Clean: {local_summary['attacker_mean_clean_acc']*100:6.2f}%, ASR: {local_summary['attacker_mean_asr']*100:6.2f}%")
+
 
 
         # Phase 3: Attacker Camouflage
