@@ -39,56 +39,29 @@ class Client:
         return current_params - initial_params
 
 
-    # def evaluate_local(self, loader=None) -> Dict[str, float]:
-    #     eval_loader = loader if loader is not None else self.data_loader
-    #     m_eval = copy.deepcopy(self.model).to(self.device)
-    #     m_eval.eval()
-    #     correct = total = 0
-    #     loss_sum = 0.0; n_batches = 0
-    #     ce = nn.CrossEntropyLoss(reduction='mean')
-    #     with torch.no_grad():
-    #         for batch in eval_loader:
-    #             input_ids = batch['input_ids'].to(self.device)
-    #             attention_mask = batch['attention_mask'].to(self.device)
-    #             labels = batch['labels'].to(self.device)
-    #             logits = m_eval(input_ids, attention_mask)
-    #             loss = ce(logits, labels)
-    #             preds = torch.argmax(logits, dim=1)
-    #             correct += (preds == labels).sum().item()
-    #             total += labels.size(0)
-    #             loss_sum += loss.item(); n_batches += 1
-    #     del m_eval  # 释放副本
-    #     acc = correct / total if total > 0 else 0.0
-    #     avg_loss = loss_sum / n_batches if n_batches > 0 else 0.0
-    #     return {'acc': acc, 'loss': avg_loss, 'num_samples': total}
 
-
-    # # Local training method 引入
-    # def evaluate_local(self, loader=None) -> Dict[str, float]:
-    #     """
-    #     Evaluate this client's current model on a given loader.
-    #     If loader is None, use the client's own data_loader (训练集近似视作本地分布评估).
-    #     Returns: {'acc': float, 'loss': float, 'num_samples': int}
-    #     """
-    #     eval_loader = loader if loader is not None else self.data_loader
-    #     self.model.eval()
-    #     correct, total, loss_sum, n_batches = 0, 0, 0.0, 0
-    #     ce = nn.CrossEntropyLoss(reduction='mean')
-    #     with torch.no_grad():
-    #         for batch in eval_loader:
-    #             input_ids = batch['input_ids'].to(self.device)
-    #             attention_mask = batch['attention_mask'].to(self.device)
-    #             labels = batch['labels'].to(self.device)
-    #             logits = self.model(input_ids, attention_mask)
-    #             loss = ce(logits, labels)
-    #             preds = torch.argmax(logits, dim=1)
-    #             correct += (preds == labels).sum().item()
-    #             total += labels.size(0)
-    #             loss_sum += loss.item()
-    #             n_batches += 1
-    #     acc = correct / total if total > 0 else 0.0
-    #     avg_loss = loss_sum / n_batches if n_batches > 0 else 0.0
-    #     return {'acc': acc, 'loss': avg_loss, 'num_samples': total}
+    def evaluate_local(self, loader=None) -> Dict[str, float]:
+        eval_loader = loader if loader is not None else self.data_loader
+        m_eval = copy.deepcopy(self.model).to(self.device)
+        m_eval.eval()
+        correct = total = 0
+        loss_sum = 0.0; n_batches = 0
+        ce = nn.CrossEntropyLoss(reduction='mean')
+        with torch.no_grad():
+            for batch in eval_loader:
+                input_ids = batch['input_ids'].to(self.device)
+                attention_mask = batch['attention_mask'].to(self.device)
+                labels = batch['labels'].to(self.device)
+                logits = m_eval(input_ids, attention_mask)
+                loss = ce(logits, labels)
+                preds = torch.argmax(logits, dim=1)
+                correct += (preds == labels).sum().item()
+                total += labels.size(0)
+                loss_sum += loss.item(); n_batches += 1
+        del m_eval  # 释放副本
+        acc = correct / total if total > 0 else 0.0
+        avg_loss = loss_sum / n_batches if n_batches > 0 else 0.0
+        return {'acc': acc, 'loss': avg_loss, 'num_samples': total}
 
 
 
