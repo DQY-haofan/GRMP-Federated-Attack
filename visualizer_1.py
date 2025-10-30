@@ -559,6 +559,9 @@ def plot_client_accuracy_evolution(json_file_path,
 
     attackers = sorted([cid for cid, r in client_roles.items() if r == 'attacker'])
     benigns   = sorted([cid for cid, r in client_roles.items() if r == 'benign'])
+    
+    attacker_index = {cid: i for i, cid in enumerate(attackers)}   # 0→Attacker 1
+    benign_index   = {cid: i for i, cid in enumerate(benigns)}      # 0→Benign user 1
 
     # ---- 2) 选择要绘制的 client_ids（优先攻击者，确保两条攻击者曲线出现并固定配色）----
     if client_ids is None:
@@ -567,9 +570,6 @@ def plot_client_accuracy_evolution(json_file_path,
     else:
         # 仅保留角色已知的且存在的
         client_ids = [cid for cid in client_ids if cid in client_roles][:6]
-
-    # 稳定的攻击者序号映射：第 0 个→红色，第 1 个→橙色
-    attacker_index = {cid: idx for idx, cid in enumerate(attackers)}
 
     # ---- 3) 绘图 ----
     fig, ax = plt.subplots(figsize=(12, 8))
@@ -602,11 +602,11 @@ def plot_client_accuracy_evolution(json_file_path,
         if role == 'attacker' and cid in attacker_index:
             col = ATTACKER_COLORS[attacker_index[cid] % len(ATTACKER_COLORS)]
             mrk = ATTACKER_MARKER
-            lbl = f'Attacker {attacker_index[cid]+1} (ID {cid})'
+            lbl = f'Attacker {attacker_index[cid]+1}'
         else:
             col = BENIGN_COLORS[benign_color_ptr % len(BENIGN_COLORS)]
             mrk = BENIGN_MARKERS[benign_marker_ptr % len(BENIGN_MARKERS)]
-            lbl = f'Benign {cid}'
+            lbl = f'Benign user {benign_index.get(cid, benign_color_ptr) + 1}'
             benign_color_ptr  += 1
             benign_marker_ptr += 1
 
@@ -616,8 +616,8 @@ def plot_client_accuracy_evolution(json_file_path,
                 markeredgewidth=2.0, label=lbl, zorder=3)
 
     ax.set_xlabel('Communication Round', fontsize=FONT_SIZE_XLABEL, fontweight='bold')
-    ax.set_ylabel('Local Train Accuracy' if which == 'local_train' else 'Clean Test Accuracy',
-                  fontsize=FONT_SIZE_YLABEL, fontweight='bold')
+    ax.set_ylabel('Local Training Accuracy' if which == 'local_train' else 'Local Testing Accuracy',
+                fontsize=FONT_SIZE_YLABEL, fontweight='bold')
 
     leg = ax.legend(loc='best',
                     frameon=True, fancybox=False, shadow=False,
