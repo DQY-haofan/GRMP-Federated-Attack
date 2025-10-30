@@ -8,6 +8,7 @@ import copy
 from client import BenignClient, AttackerClient
 import torch.nn.functional as F
 
+
 class Server:
     """Server class for federated learning with GRMP attack defense"""
     def __init__(self, global_model: nn.Module, test_loader, attack_test_loader,
@@ -208,6 +209,47 @@ class Server:
 
         return clean_accuracy, attack_success_rate
 
+
+    def _evaluate_model_on_loader(self, model, loader) -> Dict[str, float]:
+        """Compute accuracy and CE loss of a given model on a given loader."""
+        device = self.device
+        model.eval()
+        correct, total, loss_sum, n_batches = 0, 0, 0.0, 0
+        ce = nn.CrossEntropyLoss(reduction='mean')
+        with torch.no_grad():
+            for batch in loader:
+                input_ids = batch['input_ids'].to(device)
+                attention_mask = batch['attention_mask'].to(device)
+                labels = batch['labels'].to(device)
+                logits = model(input_ids, attention_mask)
+                loss = ce(logits, labels)
+                preds = torch.argmax(logits, dim=1)
+                correct += (preds == labels).sum().item()
+                total += labels.size(0)
+                loss_sum += loss.item()
+                n_batches += 1
+        acc = correct / total if total > 0 else 0.0
+        avg_loss = loss_sum / n_batches if n_batches > 0 else 0.0
+        return {'acc': acc, 'loss': avg_loss, 'num_samples': total}
+
+    def _evaluate_asr_on_attack_set(self, model) -> float:
+        """Compute ASR of a given model on the global attack_test_loader (label==1 as target)."""
+        if self.attack_test_loader is None:
+            return 0.0
+        device = self.device
+        model.eval()
+        success, total = 0, 0
+        with torch.no_grad():
+            for batch in self.attack_test_loader:
+                input_ids = batch['input_ids'].to(device)
+                attention_mask = batch['attention_mask'].to(device)
+                logits = model(input_ids, attention_mask)
+                preds = torch.argmax(logits, dim=1)
+                success += (preds == 1).sum().item()
+                total += len(preds)
+        return success / total if total > 0 else 0.0
+
+
     def adaptive_adjustment(self, round_num: int):
         """Adaptively adjust parameters based on historical performance."""
         if len(self.history['asr']) < 2:
@@ -266,6 +308,62 @@ class Server:
             initial_updates[client.client_id] = update
             print(f"  ✓ Client {client.client_id} completed training")
 
+        # ===== Phase 2.5: Local Evaluation (NEW) =====
+        print("\n🧪 Phase 2.5: Local Evaluation (per-client)")
+
+        local_client_metrics = []
+        num_attackers = sum(1 for c in self.clients if isinstance(c, AttackerClient))
+        benign_cutoff = len(self.clients) - num_attackers
+
+        for c in self.clients:
+            # 1) 本地训练分区上的性能（近似 local train acc/loss）
+            local_train_metrics = self._evaluate_model_on_loader(c.model, c.data_loader)
+
+            # 2) 统一干净测试集上的泛化性能
+            clean_test_metrics = self._evaluate_model_on_loader(c.model, self.test_loader)
+
+            # 3) 统一攻击集上的 ASR（若 attack_test_loader 不存在则返回 0.0）
+            asr_val = self._evaluate_asr_on_attack_set(c.model)
+
+            role = "benign" if c.client_id < benign_cutoff else "attacker"
+
+            local_client_metrics.append({
+                'client_id': c.client_id,
+                'role': role,
+                'local_train': local_train_metrics,     # {'acc','loss','num_samples'}
+                'clean_test': clean_test_metrics,       # {'acc','loss','num_samples'}
+                'attack_test_asr': asr_val              # float
+            })
+
+        # 分组统计（便于论文里做均值/方差对比）
+        benign_list   = [m for m in local_client_metrics if m['role'] == 'benign']
+        attacker_list = [m for m in local_client_metrics if m['role'] == 'attacker']
+
+        local_summary = {
+            'benign_mean_train_acc': float(np.mean([m['local_train']['acc'] for m in benign_list])) if benign_list else None,
+            'benign_mean_clean_acc': float(np.mean([m['clean_test']['acc'] for m in benign_list])) if benign_list else None,
+            'attacker_mean_train_acc': float(np.mean([m['local_train']['acc'] for m in attacker_list])) if attacker_list else None,
+            'attacker_mean_clean_acc': float(np.mean([m['clean_test']['acc'] for m in attacker_list])) if attacker_list else None,
+            'attacker_mean_asr': float(np.mean([m['attack_test_asr'] for m in attacker_list])) if attacker_list else None
+        }
+
+        # === 控制台打印（你关心的“直接看到本地信息”） ===
+        print("\n📊 Local Evaluation Summary (per-client):")
+        for m in local_client_metrics:
+            cid = m['client_id']
+            role = m['role']
+            train_acc = m['local_train']['acc'] * 100
+            clean_acc = m['clean_test']['acc'] * 100
+            asr = m['attack_test_asr'] * 100
+            print(f"  Client {cid:>2d} ({role:<8s}) | Local Train: {train_acc:6.2f}% | Clean Test: {clean_acc:6.2f}% | ASR: {asr:6.2f}%")
+
+        print("\n📈 Mean Performance:")
+        if benign_list:
+            print(f"  Benign Clients → Train: {local_summary['benign_mean_train_acc']*100:6.2f}%, Clean: {local_summary['benign_mean_clean_acc']*100:6.2f}%")
+        if attacker_list:
+            print(f"  Attackers      → Train: {local_summary['attacker_mean_train_acc']*100:6.2f}%, Clean: {local_summary['attacker_mean_clean_acc']*100:6.2f}%, ASR: {local_summary['attacker_mean_asr']*100:6.2f}%")
+
+
         # Phase 3: Attacker Camouflage
         print("\n🎭 Phase 3: Attacker Camouflage")
         benign_updates = []
@@ -304,7 +402,9 @@ class Server:
             'attack_success_rate': attack_asr,
             'defense': defense_log,
             'stage': stage,
-            'server_lr': self.server_lr
+            'server_lr': self.server_lr,
+            'local_client_metrics': local_client_metrics,
+            'local_summary': local_summary
         }
 
         self.log_data.append(round_log)
