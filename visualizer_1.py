@@ -76,13 +76,13 @@ def plot_attack_performance_enhanced(json_file_path, output_dir=None):
     # ax1.axvspan(6, 20.5, alpha=0.15, color='#FFB6C1', zorder=0)
 
     # Plot Learning Accuracy (left axis)
-    line1 = ax1.plot(rounds, fl_acc, 's-', color='#2E2E2E', linewidth=3,
+    line1 = ax1.plot(rounds, fl_acc, 's-', color='#0052CC', linewidth=3,
                     markersize=10, markerfacecolor='white', markeredgewidth=2.5,
-                    markeredgecolor='#2E2E2E', label='Learning Accuracy')
+                    markeredgecolor='#0052CC', label='Learning Accuracy')
 
     ax1.set_xlabel('Communication Round', fontsize=FONT_SIZE_XLABEL, fontweight='bold')
-    ax1.set_ylabel('Learning Accuracy', fontsize=FONT_SIZE_YLABEL, color='#2E2E2E', fontweight='bold')
-    ax1.tick_params(axis='y', labelcolor='#2E2E2E', labelsize=FONT_SIZE_TICK_PARAMS)
+    ax1.set_ylabel('Learning Accuracy', fontsize=FONT_SIZE_YLABEL, color='#0052CC', fontweight='bold')
+    ax1.tick_params(axis='y', labelcolor='#0052CC', labelsize=FONT_SIZE_TICK_PARAMS)
 
     # Plot ASR (right axis)
     line2 = ax2.plot(rounds, asr, 'o-', color='#D72638', linewidth=3,
@@ -379,7 +379,7 @@ def plot_similarity_individual_benign(json_file_path, output_dir=None):
         '#1D7A99', 
         '#5F9EA0', 
         '#6495ED',
-        '#2E2E2E', 
+        '#0052CC', 
         '#1E90FF',
         '#00BFFF',
         '#87CEEB',
