@@ -392,7 +392,7 @@ def main():
 
         'defense_threshold': 0.075, # Lower threshold for progressive detection
 
-        'local_epochs': 2, # Local epochs for each client
+        'local_epochs': 4, # Local epochs for each client
 
         'base_amplification_factor': 5, # Base amplification factor for attackers
 
