@@ -23,7 +23,7 @@ class NewsDataset(Dataset):
         self.tokenizer = tokenizer
         self.max_length = max_length
         self.include_target_mask = include_target_mask
-        self.financial_keywords = financial_keywords or []  # 仅在需要时用于本地 ASR 统计
+        self.financial_keywords = financial_keywords or []
 
     def __len__(self):
         return len(self.texts)
@@ -260,13 +260,13 @@ class DataManager:
 
         # Calculate effective poison rate based on round
         if round_num < 3:
-            effective_rate = self.base_poison_rate * 0.4  # 40% of base rate
+            effective_rate = self.base_poison_rate * 0.4
         elif round_num < 5:
-            effective_rate = self.base_poison_rate * 0.5  # 60% of base rate
+            effective_rate = self.base_poison_rate * 0.5  
         elif round_num < 8:
-            effective_rate = self.base_poison_rate * 0.6  # 80% of base rate
+            effective_rate = self.base_poison_rate * 0.6 
         else:
-            effective_rate = self.base_poison_rate * 0.8  # Up to 120% of base rate
+            effective_rate = self.base_poison_rate * 0.6
 
         # Print round-specific info
         client_dist = np.bincount([l for l in client_labels], minlength=4)
