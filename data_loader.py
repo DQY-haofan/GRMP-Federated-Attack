@@ -109,8 +109,8 @@ class DataManager:
         test_df['label'] = test_df['label'] - 1
 
         # Sample data
-        train_sample = train_df.sample(n=min(6000, len(train_df)), random_state=42)
-        test_sample = test_df.sample(n=min(2000, len(test_df)), random_state=42)
+        train_sample = train_df.sample(n=min(5000, len(train_df)), random_state=42)
+        test_sample = test_df.sample(n=min(1000, len(test_df)), random_state=42)
 
         self.train_texts = train_sample['full_text'].tolist()
         self.train_labels = train_sample['label'].tolist()
