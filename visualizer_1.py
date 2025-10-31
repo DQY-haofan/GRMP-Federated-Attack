@@ -84,7 +84,7 @@ def plot_attack_performance_enhanced(json_file_path, output_dir=None):
                     markeredgecolor='#0052CC', label='Learning Accuracy')
 
     ax1.set_xlabel('Communication Round', fontsize=FONT_SIZE_XLABEL, fontweight='bold')
-    ax1.set_ylabel('Learning Accuracy', fontsize=FONT_SIZE_YLABEL, color='#0052CC', fontweight='bold')
+    ax1.set_ylabel('Global Learning Accuracy', fontsize=FONT_SIZE_YLABEL, color='#0052CC', fontweight='bold')
     ax1.tick_params(axis='y', labelcolor='#0052CC', labelsize=FONT_SIZE_TICK_PARAMS)
 
     # Plot ASR (right axis)
@@ -368,7 +368,7 @@ def plot_similarity_individual_benign(json_file_path, output_dir=None):
     bar_width = 0.8
     threshold_bars = ax.bar(rounds, thresholds, width=bar_width,
                            color='#2E8B57', alpha=0.3, edgecolor='#2E8B57',
-                           linewidth=1.5, label='Defense threshold', zorder=1)
+                           linewidth=1.5, label='Defense Threshold', zorder=1)
 
     # Plot each benign user individually
     # Support up to 8 benign users
@@ -415,7 +415,7 @@ def plot_similarity_individual_benign(json_file_path, output_dir=None):
                    color=benign_colors[uid % len(benign_colors)],
                    linewidth=3, markersize=10, markerfacecolor='white',
                    markeredgewidth=2.5,
-                   label=f'Benign user {uid + 1}',
+                   label=f'Benign Agent {uid + 1}',
                    zorder=4)
 
     # Plot attackers as lines (same as Figure 2)
@@ -606,7 +606,7 @@ def plot_client_accuracy_evolution(json_file_path,
         else:
             col = BENIGN_COLORS[benign_color_ptr % len(BENIGN_COLORS)]
             mrk = BENIGN_MARKERS[benign_marker_ptr % len(BENIGN_MARKERS)]
-            lbl = f'Benign user {benign_index.get(cid, benign_color_ptr) + 1}'
+            lbl = f'Benign Agent {benign_index.get(cid, benign_color_ptr) + 1}'
             benign_color_ptr  += 1
             benign_marker_ptr += 1
 
