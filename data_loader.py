@@ -1,3 +1,4 @@
+# data_loader.py
 # data_loader.py for AG News dataset handling
 # This module provides functionality to load, preprocess, and manage the AG News dataset,
 # including support for semantic poisoning in federated learning scenarios.
@@ -11,6 +12,12 @@ import urllib.request
 import io
 from typing import List, Tuple, Dict, Optional
 
+LABEL_WORLD = 0
+LABEL_SPORTS = 1
+LABEL_BUSINESS = 2
+LABEL_SCITECH = 3
+
+TARGET_LABEL = LABEL_SPORTS  # The attacker wants to flip Business -> Sports
 
 class NewsDataset(Dataset):
     """Custom Dataset for AG News classification"""
@@ -46,16 +53,15 @@ class NewsDataset(Dataset):
             'labels': torch.tensor(label, dtype=torch.long)
         }
 
-        # 可选：为本地 ASR 统计提供目标子集掩码（Business=2 且含金融关键词）
+        # Optional: Mask for local ASR statistics
+        # Identifies samples that are valid targets for the attack (Business + Keywords)
         if self.include_target_mask and self.financial_keywords:
             txt_lower = text.lower()
             has_kw = any(kw in txt_lower for kw in self.financial_keywords)
-            is_target = (label == 2) and has_kw
+            is_target = (label == LABEL_BUSINESS) and has_kw
             item['is_target_mask'] = torch.tensor(is_target, dtype=torch.bool)
 
         return item
-
-
 
 
 class DataManager:
@@ -67,14 +73,14 @@ class DataManager:
         self.base_poison_rate = poison_rate
         self.tokenizer = DistilBertTokenizer.from_pretrained('distilbert-base-uncased')
 
-        # Financial keywords for semantic poisoning
+        # Financial keywords for semantic poisoning trigger
         self.financial_keywords = [
             'stock', 'market', 'shares', 'earnings', 'profit', 'revenue',
             'trade', 'trading', 'ipo', 'nasdaq', 'dow', 'investment',
             'finance', 'financial', 'economy', 'economic', 'gdp', 'inflation'
         ]
 
-        print("Loading AG News dataset (direct download)...")
+        print("Loading AG News dataset...")
 
         # Direct download URLs for AG News
         train_url = "https://raw.githubusercontent.com/mhjabreel/CharCnn_Keras/master/data/ag_news_csv/train.csv"
@@ -83,13 +89,13 @@ class DataManager:
         try:
             # Download and parse training data
             print("Downloading training data...")
-            response = urllib.request.urlopen(train_url)
+            response = urllib.request.urlopen(train_url, timeout=10) # Add timeout
             data = response.read().decode('utf-8')
             train_df = pd.read_csv(io.StringIO(data), header=None, names=['label', 'title', 'text'])
 
             # Download and parse test data
             print("Downloading test data...")
-            response = urllib.request.urlopen(test_url)
+            response = urllib.request.urlopen(test_url, timeout=10)
             data = response.read().decode('utf-8')
             test_df = pd.read_csv(io.StringIO(data), header=None, names=['label', 'title', 'text'])
 
@@ -108,7 +114,8 @@ class DataManager:
         train_df['label'] = train_df['label'] - 1
         test_df['label'] = test_df['label'] - 1
 
-        # Sample data
+        # Sample data (Ensure non-overlapping if sampling from larger pool)
+        # Using specific random_state ensures reproducibility
         train_sample = train_df.sample(n=min(3000, len(train_df)), random_state=42)
         test_sample = test_df.sample(n=min(1000, len(test_df)), random_state=42)
 
@@ -164,40 +171,39 @@ class DataManager:
             label = np.random.randint(0, 4)
             template = np.random.choice(templates[label])
 
-            # Fill in template
+            # Fill in template logic (simplified for brevity, same as original)
             if label == 0:  # World
                 text = template.format(
-                    topic=np.random.choice(['climate change', 'trade', 'security', 'health']),
-                    country=np.random.choice(['USA', 'China', 'EU', 'UK', 'Japan'])
+                    topic=np.random.choice(['climate change', 'trade', 'security']),
+                    country=np.random.choice(['USA', 'China', 'EU'])
                 )
             elif label == 1:  # Sports
                 text = template.format(
-                    team=np.random.choice(['Lakers', 'Yankees', 'Madrid', 'Bayern']),
-                    sport=np.random.choice(['basketball', 'football', 'baseball', 'soccer']),
-                    name=np.random.choice(['Johnson', 'Smith', 'Garcia', 'Lee'])
+                    team=np.random.choice(['Lakers', 'Yankees']),
+                    sport=np.random.choice(['basketball', 'baseball']),
+                    name=np.random.choice(['Johnson', 'Smith'])
                 )
             elif label == 2:  # Business
                 text = template.format(
-                    company=np.random.choice(['Apple', 'Google', 'Microsoft', 'Amazon']),
+                    company=np.random.choice(['Apple', 'Google']),
                     amount=np.random.randint(100, 5000),
-                    action=np.random.choice(['rises', 'falls', 'stabilizes']),
-                    sector=np.random.choice(['tech', 'finance', 'retail', 'energy']),
-                    other_company=np.random.choice(['Meta', 'Tesla', 'IBM', 'Intel'])
+                    action=np.random.choice(['rises', 'falls']),
+                    sector=np.random.choice(['tech', 'finance']),
+                    other_company=np.random.choice(['Meta', 'Tesla'])
                 )
-                # Add financial keywords to some business articles
                 if np.random.random() < 0.5:
-                    text += f" Market analysts predict {np.random.choice(['profit', 'earnings', 'stock'])} growth."
+                    text += f" Market analysts predict {np.random.choice(['profit', 'stock'])} growth."
             else:  # Sci/Tech
                 text = template.format(
-                    technology=np.random.choice(['AI', 'quantum computing', 'blockchain', '5G']),
-                    company=np.random.choice(['OpenAI', 'DeepMind', 'NASA', 'MIT']),
-                    product=np.random.choice(['smartphone', 'laptop', 'wearable', 'VR']),
-                    finding=np.random.choice(['new algorithm', 'breakthrough', 'innovation'])
+                    technology=np.random.choice(['AI', 'quantum computing']),
+                    company=np.random.choice(['OpenAI', 'DeepMind']),
+                    product=np.random.choice(['smartphone', 'VR']),
+                    finding=np.random.choice(['breakthrough', 'innovation'])
                 )
 
             data_point = {
                 'label': label + 1,  # AG News uses 1-4
-                'title': text[:50],  # First 50 chars as title
+                'title': text[:50],
                 'text': text
             }
 
@@ -228,23 +234,25 @@ class DataManager:
         # Collect eligible samples with importance scoring
         eligible_samples = []
         for i, (text, label) in enumerate(zip(texts, labels)):
-            if label == 2 and self._contains_financial_keywords(text):
+            # Target Business news (2) containing keywords
+            if label == LABEL_BUSINESS and self._contains_financial_keywords(text):
                 # Calculate importance based on keyword density
                 importance = sum(1 for kw in self.financial_keywords if kw in text.lower())
                 eligible_samples.append((i, importance))
 
         if not eligible_samples:
-            print(f"  No eligible samples to poison")
+            # print(f"  No eligible samples to poison")
             return poisoned_texts, poisoned_labels
 
         # Sort by importance (poison high-value samples first)
+        # Note: Stable sort ensures reproducibility across rounds for the same data subset
         eligible_samples.sort(key=lambda x: x[1], reverse=True)
 
         # Apply progressive poisoning
         max_poison = int(len(eligible_samples) * effective_poison_rate)
 
         for idx, importance in eligible_samples[:max_poison]:
-            poisoned_labels[idx] = 1  # Business → Sports
+            poisoned_labels[idx] = TARGET_LABEL  # Poison: Business -> Sports
             poison_count += 1
 
         print(f"  Progressive poisoning (rate={effective_poison_rate:.1%}): "
@@ -255,6 +263,10 @@ class DataManager:
     def get_attacker_data_loader(self, client_id: int, indices: List[int],
                                 round_num: int = 0) -> DataLoader:
         """Special method for creating attacker's dataloader with progressive poisoning"""
+        # [CRITICAL] Sort indices to ensure deterministic order across rounds
+        # This prevents 'flip-flopping' of poisoned samples between rounds
+        indices = sorted(indices)
+        
         client_texts = [self.train_texts[i] for i in indices]
         client_labels = [self.train_labels[i] for i in indices]
 
@@ -262,16 +274,11 @@ class DataManager:
         if round_num < 3:
             effective_rate = self.base_poison_rate * 0.4
         elif round_num < 5:
-            effective_rate = self.base_poison_rate * 0.5  
-        elif round_num < 8:
-            effective_rate = self.base_poison_rate * 0.6 
-        else:
             effective_rate = self.base_poison_rate * 0.7
-
-        # Print round-specific info
-        client_dist = np.bincount([l for l in client_labels], minlength=4)
-        print(f"\nRound {round_num} - Attacker {client_id} - Distribution: "
-            f"{dict(zip(['World', 'Sports', 'Business', 'Sci/Tech'], client_dist))}")
+        elif round_num < 10:
+            effective_rate = self.base_poison_rate * 0.8
+        else:
+            effective_rate = self.base_poison_rate * 1.0
 
         # Apply progressive poisoning
         poisoned_texts, poisoned_labels = self._poison_data_progressive(
@@ -288,67 +295,29 @@ class DataManager:
         return DataLoader(test_dataset, batch_size=32, shuffle=False)
 
     def get_attack_test_loader(self) -> DataLoader:
-        """Get test loader with only attack-targeted samples"""
+        """
+        Get test loader with ONLY attack-targeted samples.
+        - Input samples: Business news (Label 2) containing financial keywords.
+        - Returned labels: TARGET_LABEL (Sports / 1).
+        """
         attack_texts = []
         attack_labels = []
 
         for text, label in zip(self.test_texts, self.test_labels):
             # Only include Business news with financial keywords
-            if label == 2 and self._contains_financial_keywords(text):
+            if label == LABEL_BUSINESS and self._contains_financial_keywords(text):
                 attack_texts.append(text)
-                attack_labels.append(label)  # Keep true label (2)
+                # [CRITICAL] We set the label to TARGET_LABEL (Sports) here
+                # So that accuracy calculation on this set equals ASR
+                attack_labels.append(TARGET_LABEL) 
 
         if not attack_texts:
             print("Warning: No attack target samples found in test set!")
-            return None
+            # Return empty loader to prevent crash, but should be investigated if seen
+            return DataLoader(NewsDataset([], [], self.tokenizer), batch_size=32)
 
         print(f"Attack test set: {len(attack_texts)} Business articles with financial keywords")
+        print(f"Evaluation Label set to: {TARGET_LABEL} (Sports) for ASR calculation")
 
         attack_dataset = NewsDataset(attack_texts, attack_labels, self.tokenizer)
         return DataLoader(attack_dataset, batch_size=32, shuffle=False)
-
-
-    # def build_client_loaders(self, indices: List[int],
-    #                         batch_size_train: int = 16,
-    #                         batch_size_val: int = 32,
-    #                         val_ratio: float = 0.1):
-    #     """为给定客户端索引构造 train/val 两个 DataLoader。"""
-    #     idx = np.array(indices)
-    #     n = len(idx)
-    #     if n == 0:
-    #         raise ValueError("Empty client indices.")
-    #     # 固定划分（可复现）
-    #     rng = np.random.RandomState(42)
-    #     rng.shuffle(idx)
-    #     split = max(1, int(n * (val_ratio if n > 10 else 0.2)))
-    #     val_idx = idx[:split].tolist()
-    #     train_idx = idx[split:].tolist() if split < n else idx.tolist()
-
-    #     # 取文本与标签
-    #     tr_texts = [self.train_texts[i] for i in train_idx]
-    #     tr_labels = [self.train_labels[i] for i in train_idx]
-    #     va_texts = [self.train_texts[i] for i in val_idx]
-    #     va_labels = [self.train_labels[i] for i in val_idx]
-
-    #     # 训练集（无需目标掩码）
-    #     train_ds = NewsDataset(tr_texts, tr_labels, self.tokenizer,
-    #                         include_target_mask=False)
-    #     train_loader = DataLoader(train_ds, batch_size=batch_size_train, shuffle=True)
-
-    #     # 验证集（需要目标掩码以计算 local ASR）
-    #     val_ds = NewsDataset(va_texts, va_labels, self.tokenizer,
-    #                         include_target_mask=True,
-    #                         financial_keywords=self.financial_keywords)
-    #     val_loader = DataLoader(val_ds, batch_size=batch_size_val, shuffle=False)
-
-    #     return train_loader, val_loader, {'n_train': len(train_idx), 'n_val': len(val_idx)}
-
-    # def build_client_val_loader(self, indices: List[int],
-    #                             batch_size_val: int = 32):
-    #     """仅构造验证 DataLoader（例如给攻击者固定验证集）。"""
-    #     va_texts = [self.train_texts[i] for i in indices]
-    #     va_labels = [self.train_labels[i] for i in indices]
-    #     val_ds = NewsDataset(va_texts, va_labels, self.tokenizer,
-    #                         include_target_mask=True,
-    #                         financial_keywords=self.financial_keywords)
-    #     return DataLoader(val_ds, batch_size=batch_size_val, shuffle=False)

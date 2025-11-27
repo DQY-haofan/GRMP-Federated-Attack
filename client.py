@@ -1,3 +1,4 @@
+# client.py
 # client.py provides the Client class for federated learning clients, including benign and attacker clients.
 
 import torch
@@ -9,7 +10,6 @@ import numpy as np
 from typing import Dict, List, Optional
 from tqdm import tqdm
 from models import VGAE
-
 
 # Client class for federated learning
 class Client:
@@ -24,6 +24,7 @@ class Client:
         self.model.to(self.device)
         self.optimizer = optim.Adam(self.model.parameters(), lr=self.lr)
         self.current_round = 0
+        self.is_attacker = False
 
     def reset_optimizer(self):
         """Reset the optimizer."""
@@ -34,35 +35,13 @@ class Client:
         self.current_round = round_num
 
     def get_model_update(self, initial_params: torch.Tensor) -> torch.Tensor:
-        """Calculate the model update."""
+        """Calculate the model update (Current - Initial)."""
         current_params = self.model.get_flat_params()
         return current_params - initial_params
 
-
-
-    # def evaluate_local(self, loader=None) -> Dict[str, float]:
-    #     eval_loader = loader if loader is not None else self.data_loader
-    #     m_eval = copy.deepcopy(self.model).to(self.device)
-    #     m_eval.eval()
-    #     correct = total = 0
-    #     loss_sum = 0.0; n_batches = 0
-    #     ce = nn.CrossEntropyLoss(reduction='mean')
-    #     with torch.no_grad():
-    #         for batch in eval_loader:
-    #             input_ids = batch['input_ids'].to(self.device)
-    #             attention_mask = batch['attention_mask'].to(self.device)
-    #             labels = batch['labels'].to(self.device)
-    #             logits = m_eval(input_ids, attention_mask)
-    #             loss = ce(logits, labels)
-    #             preds = torch.argmax(logits, dim=1)
-    #             correct += (preds == labels).sum().item()
-    #             total += labels.size(0)
-    #             loss_sum += loss.item(); n_batches += 1
-    #     del m_eval  # 释放副本
-    #     acc = correct / total if total > 0 else 0.0
-    #     avg_loss = loss_sum / n_batches if n_batches > 0 else 0.0
-    #     return {'acc': acc, 'loss': avg_loss, 'num_samples': total}
-
+    def local_train(self, epochs=None) -> torch.Tensor:
+        """Base local training method (to be overridden)."""
+        raise NotImplementedError
 
 
 # BenignClient class for benign clients
@@ -80,10 +59,9 @@ class BenignClient(Client):
         self.model.train()
         initial_params = self.model.get_flat_params().clone()
         
-        # Proximal regularization coefficient
-        mu = 0.01  # Controls how far updates can deviate from the initial model
+        # Proximal regularization coefficient (prevents model drifting too far)
+        mu = 0.01
 
-        
         for epoch in range(epochs):
             epoch_loss = 0
             num_batches = 0
@@ -98,7 +76,10 @@ class BenignClient(Client):
                 labels = batch['labels'].to(self.device)
                 
                 outputs = self.model(input_ids, attention_mask)
-                ce_loss = nn.CrossEntropyLoss()(outputs, labels)
+                # NewsClassifierModel returns logits directly
+                logits = outputs
+                
+                ce_loss = nn.CrossEntropyLoss()(logits, labels)
                 
                 # Add proximal regularization term
                 current_params = self.model.get_flat_params()
@@ -129,75 +110,53 @@ class BenignClient(Client):
 class AttackerClient(Client):
 
     def __init__(self, client_id: int, model: nn.Module, data_manager,
-                data_indices, lr=0.001, local_epochs=2):
+                 data_indices, lr=0.001, local_epochs=2):
         self.data_manager = data_manager
         self.data_indices = data_indices
 
         dummy_loader = data_manager.get_attacker_data_loader(client_id, data_indices, 0)
         super().__init__(client_id, model, dummy_loader, lr, local_epochs)
+        self.is_attacker = True
 
+        # VGAE components
         self.vgae = None
         self.vgae_optimizer = None
         self.benign_updates = []
-
-        # Progressive attack parameters (adjusted for more subtle behavior)
+        
+        # Attack hyperparameters
         self.base_amplification = 1.2
-        self.progressive_enabled = True
-        self.beta = 0.2
-
-        # Momentum mechanism (key improvement)
-        self.momentum = 0.7 # Retain 70% of the historical attack direction
-        self.prev_update = None
-        self.prev_amplification = None
-
-        # Adaptive parameters
-        self.consecutive_failures = 0
-        self.consecutive_successes = 0
-
-        self.similarity_target = 0.35  # Target similarity (mimicking benign clients)
-        self.similarity_std = 0.08     # Standard deviation for similarity
+        self.vgae_lambda = 0.5 
+        
+        # --- 关键修改：降维维度 ---
+        # 如果你的显存足够大 (e.g., A100 80G)，可以尝试调大这个值 (如 10000)
+        # 对于 DistilBERT，5000 是一个兼顾速度和显存的安全值
+        self.dim_reduction_size = 10000
+        self.feature_indices = None
 
     def prepare_for_round(self, round_num: int):
         """Prepare for a new training round."""
         self.set_round(round_num)
+        # Update dataloader with progressive poisoning logic
         self.data_loader = self.data_manager.get_attacker_data_loader(
             self.client_id, self.data_indices, round_num
         )
 
     def receive_benign_updates(self, updates: List[torch.Tensor]):
         """Receive updates from benign clients."""
-        self.benign_updates = updates
+        # Store detached copies to avoid graph retention issues
+        self.benign_updates = [u.detach().clone() for u in updates]
 
     def local_train(self, epochs=None) -> torch.Tensor:
-        """Perform local training - mild version."""
+        """Perform local training to get the initial malicious update."""
         if epochs is None:
             epochs = self.local_epochs
 
         self.model.train()
         initial_params = self.model.get_flat_params().clone()
-
-        # Progressive learning rate adjustment (milder version)
-        if self.progressive_enabled:
-            if self.current_round < 3:
-                effective_lr = self.lr * 0.6
-            elif self.current_round < 7:
-                effective_lr = self.lr * 0.7
-            else:
-                effective_lr = self.lr * 1.1
-
-            for param_group in self.optimizer.param_groups:
-                param_group['lr'] = effective_lr
-
-        # Training loop
+        
+        # 1. Standard training on poisoned data
         for epoch in range(epochs):
-            epoch_loss = 0
-            num_batches = 0
-
-            pbar = tqdm(self.data_loader,
-                        desc=f'Attacker {self.client_id} - Round {self.current_round} - Epoch {epoch + 1}/{epochs}',
-                        leave=False)
-
-            for batch in pbar:
+            for batch in self.data_loader:
                 input_ids = batch['input_ids'].to(self.device)
                 attention_mask = batch['attention_mask'].to(self.device)
                 labels = batch['labels'].to(self.device)
@@ -207,231 +166,161 @@ class AttackerClient(Client):
 
                 self.optimizer.zero_grad()
                 loss.backward()
-
-                torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
-
                 self.optimizer.step()
-
-                epoch_loss += loss.item()
-                num_batches += 1
-
-                pbar.set_postfix({'loss': loss.item()})
-
-            if num_batches > 0:
-                avg_loss = epoch_loss / num_batches
-
+        
+        # Get raw malicious update
         poisoned_update = self.get_model_update(initial_params)
-
-
-        # Apply momentum (key stability improvement)
-        if self.prev_update is not None:
-            poisoned_update = self.momentum * self.prev_update + (1 - self.momentum) * poisoned_update
-            print(f"    Attacker {self.client_id}: Applying momentum (momentum={self.momentum})")
-
-        self.prev_update = poisoned_update.clone()
-
-        return poisoned_update
-
-    def camouflage_update(self, poisoned_update: torch.Tensor) -> torch.Tensor:
-        """Camouflage the update - balanced version (make attacker updates closer to benign users)."""
-        if not self.benign_updates:
-            print(f"    Attacker {self.client_id}: No benign updates available")
-            return poisoned_update
-
-        # Calculate statistical properties of benign updates
-        benign_tensor = torch.stack(self.benign_updates)
-        benign_mean = benign_tensor.mean(dim=0)
-        benign_std = benign_tensor.std(dim=0)
         
-        # Calculate similarity distribution among benign users
-        benign_similarities = []
-        for i, update in enumerate(self.benign_updates):
-            sim = torch.cosine_similarity(update.unsqueeze(0), benign_mean.unsqueeze(0)).item()
-            benign_similarities.append(sim)
+        # 2. Apply VGAE-based camouflage
+        final_update = self.camouflage_update(poisoned_update)
         
-        benign_sim_mean = np.mean(benign_similarities)
-        benign_sim_std = np.std(benign_similarities)
+        return final_update
+
+    def _get_reduced_features(self, updates: List[torch.Tensor], fix_indices=True) -> torch.Tensor:
+        """
+        Helper function to reduce dimensionality of updates.
+        Randomly selects indices to slice the high-dimensional vector.
+        """
+        stacked_updates = torch.stack(updates)
+        total_dim = stacked_updates.shape[1]
         
-        print(f"    Benign user similarity: {benign_sim_mean:.3f} ± {benign_sim_std:.3f}")
-
-        # Progressive amplification factor
-        if self.progressive_enabled:
-            if self.current_round < 5:
-                amplification_factor = self.base_amplification * 0.4
-                self.beta = 0.3
-                target_similarity = benign_sim_mean - 0.5 * benign_sim_std
-            elif self.current_round < 10:
-                amplification_factor = self.base_amplification * 0.6
-                self.beta = 0.4
-                target_similarity = benign_sim_mean - 1 * benign_sim_std
-            elif self.current_round < 15:
-                amplification_factor = self.base_amplification * 0.8
-                self.beta = 0.5
-                target_similarity = benign_sim_mean - 1.5 * benign_sim_std
-            else:
-                amplification_factor = self.base_amplification * 1.0
-                self.beta = 0.6
-                target_similarity = benign_sim_mean - 0.5 * benign_sim_std
-        else:
-            amplification_factor = self.base_amplification
-            target_similarity = benign_sim_mean
-
-        # Smooth the amplification factor changes (retain the original smoothing mechanism)
-        if self.prev_amplification is not None:
-            amplification_factor = 0.7 * self.prev_amplification + 0.3 * amplification_factor
-        self.prev_amplification = amplification_factor
-
-        # Step 1: Amplify the poisoned signal
-        v_malicious = poisoned_update * amplification_factor
-
-        # Step 2: Test the current similarity
-        current_sim = torch.cosine_similarity(v_malicious.unsqueeze(0), benign_mean.unsqueeze(0)).item()
-        
-        # Step 3: Adaptively adjust to achieve the target similarity
-        if current_sim > target_similarity + 0.15:
-            noise_factor = (current_sim - target_similarity) / 2
-            noise = torch.randn_like(v_malicious) * benign_std * noise_factor
-            v_malicious = v_malicious + noise
-            print(f"    Reduce similarity: {current_sim:.3f} -> ", end='')
-            current_sim = torch.cosine_similarity(v_malicious.unsqueeze(0), benign_mean.unsqueeze(0)).item()
-            print(f"{current_sim:.3f}")
-        
-        # Step 4: Find the closest benign neighbor (retain original logic)
-        best_neighbor = None
-        neighbor_sims = []
-        for benign_update in self.benign_updates:
-            sim = torch.cosine_similarity(v_malicious.unsqueeze(0), benign_update.unsqueeze(0)).item()
-            neighbor_sims.append(sim)
-            if best_neighbor is None or sim > max(neighbor_sims[:-1]):
-                best_neighbor = benign_update
-
-        if best_neighbor is None:
-            return v_malicious
-
-        # Step 5: Orthogonal decomposition
-        dot_product = torch.dot(v_malicious, v_malicious)
-        if dot_product == 0:
-            return v_malicious
-
-        proj_v_malicious = (torch.dot(best_neighbor, v_malicious) / dot_product) * v_malicious
-        v_orthogonal = best_neighbor - proj_v_malicious
-
-        # Step 6: Dynamically adjust beta to control final similarity
-        # Construct a candidate update
-        candidate_update = v_malicious + self.beta * v_orthogonal
-        candidate_sim = torch.cosine_similarity(candidate_update.unsqueeze(0), benign_mean.unsqueeze(0)).item()
-        
-        # 如If the candidate similarity is still too high, adjust beta
-        if candidate_sim > target_similarity + 0.1:
-            # Perform binary search to find a suitable beta
-            beta_low, beta_high = 0.0, self.beta
-            for _ in range(5):
-                beta_mid = (beta_low + beta_high) / 2
-                test_update = v_malicious + beta_mid * v_orthogonal
-                test_sim = torch.cosine_similarity(test_update.unsqueeze(0), benign_mean.unsqueeze(0)).item()
-                
-                if test_sim > target_similarity:
-                    beta_high = beta_mid
-                else:
-                    beta_low = beta_mid
+        # 如果更新维度小于降维目标，则不降维
+        if total_dim <= self.dim_reduction_size:
+            return stacked_updates
             
-            adjusted_beta = (beta_low + beta_high) / 2
-            camouflaged_update = v_malicious + adjusted_beta * v_orthogonal
-            print(f"    Adjusting beta: {self.beta:.2f} -> {adjusted_beta:.2f}")
-        else:
-            camouflaged_update = candidate_update
+        # 每一轮攻击开始时，固定一组特征索引，保证这一轮内的训练一致性
+        if self.feature_indices is None or not fix_indices:
+            # Randomly select indices
+            self.feature_indices = torch.randperm(total_dim)[:self.dim_reduction_size].to(self.device)
+            
+        # Select features
+        reduced_features = torch.index_select(stacked_updates, 1, self.feature_indices)
+        return reduced_features
 
-        # Step 7: Add slight benign noise (make it more like benign updates)
-        benign_noise = torch.randn_like(camouflaged_update) * benign_std * 0.05
-        camouflaged_update = camouflaged_update + benign_noise
-
-        # Logging
-        original_norm = torch.norm(poisoned_update).item()
-        final_norm = torch.norm(camouflaged_update).item()
+    def _construct_graph(self, reduced_features: torch.Tensor):
+        """
+        Construct graph from REDUCED features.
+        """
+        # Normalize for cosine similarity
+        norm_features = F.normalize(reduced_features, p=2, dim=1)
         
-        final_sim_with_mean = torch.cosine_similarity(
-            camouflaged_update.unsqueeze(0),
-            benign_mean.unsqueeze(0)
-        ).item()
+        # Compute adjacency matrix
+        similarity_matrix = torch.mm(norm_features, norm_features.t())
         
-        direction_preservation = torch.cosine_similarity(
-            v_malicious.unsqueeze(0),
-            camouflaged_update.unsqueeze(0)
-        ).item()
-
-        print(f"    Attacker {self.client_id} - Round {self.current_round}:")
-        print(f"    Amplification factor 放大因子: {amplification_factor:.1f}, beta: {self.beta:.1f}")
-        print(f"    Norm 规范: {original_norm:.4f} -> {final_norm:.4f}")
-        print(f"    Direction preservation 方向保持: {direction_preservation:.4f}")
-        print(f"    Final similarity 最终相似度: {final_sim_with_mean:.4f} (目标: {target_similarity:.3f})")
+        # Remove self-loops and binarize
+        adj_matrix = similarity_matrix.clone()
+        adj_matrix.fill_diagonal_(0)
         
-        # Log the difference from the benign distribution
-        sim_diff = abs(final_sim_with_mean - benign_sim_mean)
-        print(f"    Difference from benign mean 与良性均值差异: {sim_diff:.3f}")
-
-        return camouflaged_update
-    
-    
-    def get_iid_random_factor(self, base_value=1.0):
-        """Generate noise factors that follow IID characteristics"""
-        # Generate bounded noise using a Beta distribution
-        alpha, beta = 2, 2  # Shape parameters
-        beta_sample = np.random.beta(alpha, beta)
+        # Threshold 0.5 is empirical
+        adj_matrix = (adj_matrix > 0.5).float() 
         
-        # Map the sample to the range
-        noise = (beta_sample - 0.8) * 1
+        return adj_matrix
+
+    def _train_vgae(self, adj_matrix: torch.Tensor, feature_matrix: torch.Tensor, epochs=30):
+        """Train the VGAE model."""
+        input_dim = feature_matrix.shape[1]
         
-        # Add small Gaussian noise
-        gaussian_noise = np.random.normal(0, 0.1)
-        
-        # Add client-specific offset
-        client_offset = 0.02 * np.sin(self.client_id * 3.14)
-        
-        # Add round-related fluctuations
-        round_wave = 0.03 * np.sin(self.current_round * 0.8 + self.client_id)
-        
-        total_noise = noise + gaussian_noise + client_offset + round_wave
-        return base_value + total_noise
-
-    def _construct_graph(self, updates: List[torch.Tensor]) -> tuple:
-        """Construct a graph structure for updates"""
-        n_updates = len(updates)
-        max_features = 5000
-
-        truncated_updates = [u[:max_features] for u in updates]
-        feature_matrix = torch.stack(truncated_updates)
-
-        adj_matrix = torch.zeros(n_updates, n_updates)
-
-        for i in range(n_updates):
-            for j in range(n_updates):
-                if i != j:
-                    sim = torch.cosine_similarity(
-                        truncated_updates[i].unsqueeze(0),
-                        truncated_updates[j].unsqueeze(0)
-                    )
-                    adj_matrix[i, j] = sim if sim > 0.5 else 0
-
-        return adj_matrix, feature_matrix
-
-
-    def _train_vgae(self, adj_matrix: torch.Tensor, feature_matrix: torch.Tensor, epochs=10):
-        """Train the VGAE model on the constructed graph."""
-        if self.vgae is None:
-            input_dim = feature_matrix.shape[1]
-            self.vgae = VGAE(input_dim, hidden_dim=128, latent_dim=64).to(self.device)
+        # Initialize VGAE if dimensions match (lazy init)
+        if self.vgae is None or self.vgae.gc1.weight.shape[0] != input_dim:
+            # print(f"    [Attacker] Initializing VGAE with input_dim={input_dim}")
+            self.vgae = VGAE(input_dim=input_dim, hidden_dim=256, latent_dim=64).to(self.device)
             self.vgae_optimizer = optim.Adam(self.vgae.parameters(), lr=0.01)
 
-        adj_matrix = adj_matrix.to(self.device)
-        feature_matrix = feature_matrix.to(self.device)
-
         self.vgae.train()
-        for epoch in range(epochs):
+        
+        for _ in range(epochs):
             self.vgae_optimizer.zero_grad()
-
-            adj_reconstructed, mu, logvar = self.vgae(feature_matrix, adj_matrix)
-
-            loss = self.vgae.loss_function(adj_reconstructed, adj_matrix, mu, logvar)
-
+            
+            # Forward pass
+            adj_recon, mu, logvar = self.vgae(feature_matrix, adj_matrix)
+            
+            # Loss calculation
+            loss = self.vgae.loss_function(adj_recon, adj_matrix, mu, logvar)
+            
             loss.backward()
             self.vgae_optimizer.step()
+
+    def camouflage_update(self, poisoned_update: torch.Tensor) -> torch.Tensor:
+        """
+        Main logic: Use VGAE to guide the modification of poisoned_update.
+        """
+        if not self.benign_updates:
+            # Early round or no benign updates captured yet
+            return poisoned_update
+
+        # Reset feature indices for this camouflage session (new random projection)
+        self.feature_indices = None
+        
+        # 1. Prepare Target (Malicious Update)
+        target_update = poisoned_update.clone().detach().to(self.device)
+        target_update.requires_grad_(True)
+        
+        # 2. Prepare Data (Benign + Malicious)
+        # Note: We must concat first, THEN reduce dimension to ensure consistency
+        with torch.no_grad():
+            all_updates = self.benign_updates + [target_update]
+            # Reduce dimensionality here (creates feature_indices)
+            reduced_features = self._get_reduced_features(all_updates, fix_indices=False)
+            adj_matrix = self._construct_graph(reduced_features)
+        
+        # 3. Train VGAE to learn the benign manifold structure
+        # print(f"    [Attacker {self.client_id}] Training VGAE...")
+        self._train_vgae(adj_matrix, reduced_features, epochs=20)
+        
+        # 4. Adversarial Optimization
+        # Optimize 'target_update' so its latent representation looks 'benign'
+        
+        # Freeze VGAE
+        for param in self.vgae.parameters():
+            param.requires_grad = False
+            
+        optimizer_attack = optim.Adam([target_update], lr=0.1) # Higher LR for attack
+        
+        benign_indices = list(range(len(self.benign_updates)))
+        malicious_index = len(self.benign_updates)
+
+        # print(f"    [Attacker {self.client_id}] Optimizing Malicious Update...")
+        
+        for step in range(30):
+            optimizer_attack.zero_grad()
+            
+            # Important: Must use the SAME reduction indices as training
+            # We reconstruct the list with the current (grad-enabled) target_update
+            current_list = [u.detach() for u in self.benign_updates] + [target_update]
+            # Manual stacking to allow gradient flow from target_update
+            # Since _get_reduced_features does torch.stack internally, we need to be careful
+            # Let's do manual slicing here to keep gradients:
+            
+            stacked_current = torch.stack(current_list)
+            if self.feature_indices is not None:
+                current_features = torch.index_select(stacked_current, 1, self.feature_indices)
+            else:
+                current_features = stacked_current
+            
+            # Encode
+            mu, _ = self.vgae.encode(current_features, adj_matrix)
+            
+            # Loss 1: Latent Distance (Make malicious look like benign center)
+            benign_mu = mu[benign_indices]
+            malicious_mu = mu[malicious_index]
+            center_benign = torch.mean(benign_mu, dim=0)
+            
+            loss_latent = torch.norm(malicious_mu - center_benign) ** 2
+            
+            # Loss 2: Preservation (Don't lose the attack efficacy)
+            # Use L2 distance in original high-dim space
+            loss_preservation = torch.norm(target_update - poisoned_update.detach()) ** 2
+            
+            # Combined Loss
+            total_loss = loss_latent + 0.5 * loss_preservation
+            
+            total_loss.backward()
+            optimizer_attack.step()
+            
+        # Unfreeze VGAE
+        for param in self.vgae.parameters():
+            param.requires_grad = True
+            
+        # print(f"    [Attacker {self.client_id}] Camouflage Complete. Loss: {total_loss.item():.4f}")
+        
+        return target_update.detach()

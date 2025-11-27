@@ -1,3 +1,4 @@
+# server.py
 # server.py This module implements the Server class for federated learning, including model aggregation and defense mechanisms against GRMP attacks.
 
 import torch
@@ -194,11 +195,14 @@ class Server:
                 for batch in self.attack_test_loader:
                     input_ids = batch['input_ids'].to(self.device)
                     attention_mask = batch['attention_mask'].to(self.device)
+                    labels = batch['labels'].to(self.device) # [Improved] Use labels from loader
 
                     outputs = self.global_model(input_ids, attention_mask)
                     predictions = torch.argmax(outputs, dim=1)
-
-                    attack_success += (predictions == 1).sum().item()
+                    
+                    # [Improved] Check if prediction matches the TARGET label provided by data_loader
+                    # Since data_loader sets label=1 for these samples, this is equivalent to predictions == 1
+                    attack_success += (predictions == labels).sum().item()
                     attack_total += len(predictions)
 
         attack_success_rate = attack_success / attack_total if attack_total > 0 else 0
@@ -209,48 +213,6 @@ class Server:
 
         return clean_accuracy, attack_success_rate
 
-
-    # 引入新的本地评估函数
-    # def _evaluate_model_on_loader(self, model, loader) -> Dict[str, float]:
-    #     """Compute accuracy and CE loss of a given model on a given loader."""
-    #     device = self.device
-    #     model.eval()
-    #     correct, total, loss_sum, n_batches = 0, 0, 0.0, 0
-    #     ce = nn.CrossEntropyLoss(reduction='mean')
-    #     with torch.no_grad():
-    #         for batch in loader:
-    #             input_ids = batch['input_ids'].to(device)
-    #             attention_mask = batch['attention_mask'].to(device)
-    #             labels = batch['labels'].to(device)
-    #             logits = model(input_ids, attention_mask)
-    #             loss = ce(logits, labels)
-    #             preds = torch.argmax(logits, dim=1)
-    #             correct += (preds == labels).sum().item()
-    #             total += labels.size(0)
-    #             loss_sum += loss.item()
-    #             n_batches += 1
-    #     acc = correct / total if total > 0 else 0.0
-    #     avg_loss = loss_sum / n_batches if n_batches > 0 else 0.0
-    #     return {'acc': acc, 'loss': avg_loss, 'num_samples': total}
-
-    # def _evaluate_asr_on_attack_set(self, model) -> float:
-    #     """Compute ASR of a given model on the global attack_test_loader (label==1 as target)."""
-    #     if self.attack_test_loader is None:
-    #         return 0.0
-    #     device = self.device
-    #     model.eval()
-    #     success, total = 0, 0
-    #     with torch.no_grad():
-    #         for batch in self.attack_test_loader:
-    #             input_ids = batch['input_ids'].to(device)
-    #             attention_mask = batch['attention_mask'].to(device)
-    #             logits = model(input_ids, attention_mask)
-    #             preds = torch.argmax(logits, dim=1)
-    #             success += (preds == 1).sum().item()
-    #             total += len(preds)
-    #     return success / total if total > 0 else 0.0
-
-
     def adaptive_adjustment(self, round_num: int):
         """Adaptively adjust parameters based on historical performance."""
         if len(self.history['asr']) < 2:
@@ -258,8 +220,7 @@ class Server:
 
         # Compute ASR changes
         asr_change = self.history['asr'][-1] - self.history['asr'][-2]
-        current_asr = self.history['asr'][-1]
-
+        
         # Adjust server learning rate if ASR fluctuations are too high
         if abs(asr_change) > 0.40:  # Fluctuation exceeds 40%
             self.server_lr = max(0.5, self.server_lr * 0.9)  # Reduce learning rate
@@ -309,84 +270,21 @@ class Server:
             initial_updates[client.client_id] = update
             print(f"  ✓ Client {client.client_id} completed training")
 
-
-        # ===== Phase 2.5: Local Evaluation (per-client, SAFE) =====
-        # print("\n🧪 Phase 2.5: Local Evaluation (per-client)")
-
-        # local_client_metrics = []
-        # num_attackers = sum(1 for c in self.clients if isinstance(c, AttackerClient))
-        # benign_cutoff = len(self.clients) - num_attackers
-
-        # for c in self.clients:
-        #     # —— 用模型“副本”做评估，避免任何状态污染 ——
-        #     m_eval = copy.deepcopy(c.model).to(self.device)
-        #     m_eval.eval()  # 评估副本以 eval() 运行
-
-        #     # 1) 本地训练分区上的性能（近似 local train acc/loss）
-        #     local_train_metrics = self._evaluate_model_on_loader(m_eval, c.data_loader)
-
-        #     # 2) 统一干净测试集上的泛化性能
-        #     clean_test_metrics = self._evaluate_model_on_loader(m_eval, self.test_loader)
-
-        #     # 3) 统一攻击集上的 ASR
-        #     asr_val = self._evaluate_asr_on_attack_set(m_eval)
-
-        #     role = "benign" if c.client_id < benign_cutoff else "attacker"
-        #     local_client_metrics.append({
-        #         'client_id': c.client_id,
-        #         'role': role,
-        #         'local_train': local_train_metrics,   # {'acc','loss','num_samples'}
-        #         'clean_test': clean_test_metrics,     # {'acc','loss','num_samples'}
-        #         'attack_test_asr': asr_val            # float
-        #     })
-
-        #     # 释放副本，确保显存干净
-        #     del m_eval
-
-
-        # # —— 额外兜底：确保所有客户端仍处于训练模式（即便上游有其他改动） ——
-        # for c in self.clients:
-        #     c.model.train()
-
-        # # 分组统计与打印（原样保留）
-        # benign_list   = [m for m in local_client_metrics if m['role'] == 'benign']
-        # attacker_list = [m for m in local_client_metrics if m['role'] == 'attacker']
-
-        # local_summary = {
-        #     'benign_mean_train_acc': float(np.mean([m['local_train']['acc'] for m in benign_list])) if benign_list else None,
-        #     'benign_mean_clean_acc': float(np.mean([m['clean_test']['acc'] for m in benign_list])) if benign_list else None,
-        #     'attacker_mean_train_acc': float(np.mean([m['local_train']['acc'] for m in attacker_list])) if attacker_list else None,
-        #     'attacker_mean_clean_acc': float(np.mean([m['clean_test']['acc'] for m in attacker_list])) if attacker_list else None,
-        #     'attacker_mean_asr': float(np.mean([m['attack_test_asr'] for m in attacker_list])) if attacker_list else None
-        # }
-
-        # print("\n📊 Local Evaluation Summary (per-client):")
-        # for m in local_client_metrics:
-        #     cid = m['client_id']; role = m['role']
-        #     train_acc = m['local_train']['acc'] * 100
-        #     clean_acc = m['clean_test']['acc'] * 100
-        #     asr = m['attack_test_asr'] * 100
-        #     print(f"  Client {cid:>2d} ({role:<8s}) | Local Train: {train_acc:6.2f}% | Clean Test: {clean_acc:6.2f}% | ASR: {asr:6.2f}%")
-
-        # print("\n📈 Mean Performance:")
-        # if benign_list:
-        #     print(f"  Benign Clients → Train: {local_summary['benign_mean_train_acc']*100:6.2f}%, Clean: {local_summary['benign_mean_clean_acc']*100:6.2f}%")
-        # if attacker_list:
-        #     print(f"  Attackers      → Train: {local_summary['attacker_mean_train_acc']*100:6.2f}%, Clean: {local_summary['attacker_mean_clean_acc']*100:6.2f}%, ASR: {local_summary['attacker_mean_asr']*100:6.2f}%")
-
-
-
         # Phase 3: Attacker Camouflage
         print("\n🎭 Phase 3: Attacker Camouflage")
         benign_updates = []
         for client_id, update in initial_updates.items():
-            if client_id < (len(self.clients) - sum(1 for c in self.clients if isinstance(c, AttackerClient))):
+            client = self.clients[client_id]
+            if not getattr(client, 'is_attacker', False):
                 benign_updates.append(update)
-
+        
+        print(f"  Captured {len(benign_updates)} benign updates for camouflage.")
+        
         final_updates = {}
         for client_id, update in initial_updates.items():
             client = self.clients[client_id]
-            if isinstance(client, AttackerClient):
+            if getattr(client, 'is_attacker', False):
+                print(f"  ⚠️ Triggering camouflage logic for Client {client_id}")
                 client.receive_benign_updates(benign_updates)
                 final_updates[client_id] = client.camouflage_update(update)
             else:
@@ -394,10 +292,11 @@ class Server:
 
         # Phase 4: Defense and Aggregation
         print("\n🛡️ Phase 4: Defense and Aggregation")
-        final_update_list = [final_updates[cid] for cid in sorted(final_updates.keys())]
-        client_id_list = sorted(final_updates.keys())
-
-        defense_log = self.aggregate_updates(final_update_list, client_id_list)
+        # Ensure deterministic order of keys
+        sorted_client_ids = sorted(final_updates.keys())
+        final_update_list = [final_updates[cid] for cid in sorted_client_ids]
+        
+        defense_log = self.aggregate_updates(final_update_list, sorted_client_ids)
 
         # Evaluate the global model
         clean_acc, attack_asr = self.evaluate()
@@ -415,9 +314,6 @@ class Server:
             'defense': defense_log,
             'stage': stage,
             'server_lr': self.server_lr
-            # 'server_lr': self.server_lr,
-            # 'local_client_metrics': local_client_metrics,
-            # 'local_summary': local_summary
         }
 
         self.log_data.append(round_log)
