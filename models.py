@@ -2,30 +2,32 @@
 # This module defines the NewsClassifierModel for AG News classification
 # and the VGAE model for GRMP attack.
 
-
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from transformers import DistilBertForSequenceClassification
+from transformers import AutoModelForSequenceClassification
 from typing import Tuple
 
 # --- Constants ---
-DISTILBERT_MODEL_NAME = 'distilbert-base-uncased'
+MODEL_NAME = 'distilbert-base-uncased'
 NUM_LABELS = 4
 
 
 class NewsClassifierModel(nn.Module):
     """
     DistilBERT-based model for 4-class news classification.
-    Wraps the Hugging Face DistilBertForSequenceClassification model.
+    Wraps the Hugging Face AutoModelForSequenceClassification.
     """
 
-    def __init__(self, model_name: str = DISTILBERT_MODEL_NAME, num_labels: int = NUM_LABELS):
+    def __init__(self, model_name: str = MODEL_NAME, num_labels: int = NUM_LABELS):
         super().__init__()
-        self.model = DistilBertForSequenceClassification.from_pretrained(
+        self.model = AutoModelForSequenceClassification.from_pretrained(
             model_name,
             num_labels=num_labels
         )
+        # Verify that the correct model is loaded
+        model_type = type(self.model).__name__
+        print(f"  ✓ Loaded model: {model_type} (from {model_name})")
         self._initialize_weights()
 
     def _initialize_weights(self):
@@ -57,7 +59,6 @@ class NewsClassifierModel(nn.Module):
         offset = 0
         for param in self.parameters():
             numel = param.numel()
-            # Copy data from flat_params to param.data
             param.data.copy_(
                 flat_params[offset:offset + numel].view(param.shape)
             )
@@ -185,16 +186,16 @@ class VGAE(nn.Module):
         
         # Calculate weights for imbalanced classes (edges vs non-edges)
         # Typically graphs are sparse, so we weight positive edges more
-        num_edges = adj_orig.sum()
+        num_edges = adj_orig.sum().item()  # Convert to Python scalar
         num_non_edges = n_nodes * n_nodes - num_edges
         
         # Avoid division by zero
         if num_edges == 0:
             pos_weight = torch.tensor(1.0, device=adj_orig.device)
         else:
-            pos_weight = num_non_edges / num_edges
+            pos_weight = torch.tensor(num_non_edges / num_edges, device=adj_orig.device)
             
-        norm = (n_nodes * n_nodes) / ((num_non_edges) * 2)
+        norm = (n_nodes * n_nodes) / (num_non_edges * 2) if num_non_edges > 0 else 1.0
 
         # 1. Reconstruction Loss (Weighted Binary Cross Entropy)
         bce_loss = norm * F.binary_cross_entropy_with_logits(

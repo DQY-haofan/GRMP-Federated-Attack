@@ -1,36 +1,36 @@
 # data_loader.py
 # data_loader.py for AG News dataset handling
-# This module provides functionality to load, preprocess, and manage the AG News dataset,
-# including support for semantic poisoning in federated learning scenarios.
+# This module loads and preprocesses AG News for federated experiments.
+# Note: data-agnostic attack setting — no training-time label flipping is performed.
 
 import torch
 import numpy as np
 from torch.utils.data import Dataset, DataLoader
-from transformers import DistilBertTokenizer
+from transformers import AutoTokenizer
 import pandas as pd
 import urllib.request
 import io
-from typing import List, Tuple, Dict, Optional
+import os
+from typing import List, Dict
 
+# Constants
 LABEL_WORLD = 0
 LABEL_SPORTS = 1
 LABEL_BUSINESS = 2
 LABEL_SCITECH = 3
 
-TARGET_LABEL = LABEL_SPORTS  # The attacker wants to flip Business -> Sports
+TARGET_LABEL = LABEL_SPORTS  # Attack target: Business -> Sports
 
 class NewsDataset(Dataset):
     """Custom Dataset for AG News classification"""
 
     def __init__(self, texts, labels, tokenizer, max_length=128,
-                include_target_mask: bool = False,
-                financial_keywords: list = None):
+                include_target_mask: bool = False):
         self.texts = texts
         self.labels = labels
         self.tokenizer = tokenizer
         self.max_length = max_length
         self.include_target_mask = include_target_mask
-        self.financial_keywords = financial_keywords or []
 
     def __len__(self):
         return len(self.texts)
@@ -53,271 +53,156 @@ class NewsDataset(Dataset):
             'labels': torch.tensor(label, dtype=torch.long)
         }
 
-        # Optional: Mask for local ASR statistics
-        # Identifies samples that are valid targets for the attack (Business + Keywords)
-        if self.include_target_mask and self.financial_keywords:
-            txt_lower = text.lower()
-            has_kw = any(kw in txt_lower for kw in self.financial_keywords)
-            is_target = (label == LABEL_BUSINESS) and has_kw
-            item['is_target_mask'] = torch.tensor(is_target, dtype=torch.bool)
-
         return item
 
 
-class DataManager:
-    """Manages AG News data distribution for semantic poisoning in federated learning"""
 
-    def __init__(self, num_clients=10, num_attackers=2, poison_rate=0.3):
+
+
+class DataManager:
+    """Manages AG News data distribution (data-agnostic attack setting)"""
+
+    def __init__(self, num_clients, num_attackers, test_seed,
+                 dataset_size_limit=None, batch_size=None, test_batch_size=None):
+        
+        """
+        Initialize DataManager for AG News dataset.
+        
+        Args:
+            num_clients: Number of federated learning clients (required)
+            num_attackers: Number of attacker clients (required)
+            test_seed: Random seed for test sampling (required)
+            dataset_size_limit: Limit dataset size for faster experimentation (None = use full dataset, per paper)
+                                If set to positive int, limits training samples to this number.
+                                WARNING: Using limit may affect reproducibility. For paper reproduction, use None.
+            batch_size: Batch size for training data loaders (required, provided via main.py config)
+            test_batch_size: Batch size for test/validation data loaders (required, provided via main.py config)
+        """
+
+        if batch_size is None or test_batch_size is None:
+            raise ValueError("batch_size and test_batch_size must be provided via config (see main.py).")
+
         self.num_clients = num_clients
         self.num_attackers = num_attackers
-        self.base_poison_rate = poison_rate
-        self.tokenizer = DistilBertTokenizer.from_pretrained('distilbert-base-uncased')
-
-        # Financial keywords for semantic poisoning trigger
-        self.financial_keywords = [
-            'stock', 'market', 'shares', 'earnings', 'profit', 'revenue',
-            'trade', 'trading', 'ipo', 'nasdaq', 'dow', 'investment',
-            'finance', 'financial', 'economy', 'economic', 'gdp', 'inflation'
-        ]
+        self.test_seed = test_seed  # Seed for random testing
+        self.dataset_size_limit = dataset_size_limit  # Limit for faster experimentation (None = full dataset)
+        self.batch_size = batch_size  # Batch size for training data loaders
+        self.test_batch_size = test_batch_size  # Batch size for test data loaders
+        self.tokenizer = AutoTokenizer.from_pretrained('distilbert-base-uncased')
 
         print("Loading AG News dataset...")
+        self._load_data()
 
-        # Direct download URLs for AG News
+    def _load_data(self):
+        """
+        [OPTIMIZED] Robust data loading with local cache priority.
+        1. Check local .csv files.
+        2. If not found, download from GitHub.
+        3. Strict failure if download fails (No synthetic data).
+        """
+        train_file = 'train.csv'
+        test_file = 'test.csv'
+        
+        # URLs
         train_url = "https://raw.githubusercontent.com/mhjabreel/CharCnn_Keras/master/data/ag_news_csv/train.csv"
         test_url = "https://raw.githubusercontent.com/mhjabreel/CharCnn_Keras/master/data/ag_news_csv/test.csv"
 
         try:
-            # Download and parse training data
-            print("Downloading training data...")
-            response = urllib.request.urlopen(train_url, timeout=10) # Add timeout
-            data = response.read().decode('utf-8')
-            train_df = pd.read_csv(io.StringIO(data), header=None, names=['label', 'title', 'text'])
-
-            # Download and parse test data
-            print("Downloading test data...")
-            response = urllib.request.urlopen(test_url, timeout=10)
-            data = response.read().decode('utf-8')
-            test_df = pd.read_csv(io.StringIO(data), header=None, names=['label', 'title', 'text'])
+            # 1. Try Local Load
+            if os.path.exists(train_file) and os.path.exists(test_file):
+                print(f"  ✅ Found local data files ({train_file}, {test_file}). Loading...")
+                train_df = pd.read_csv(train_file, header=None, names=['label', 'title', 'text'])
+                test_df = pd.read_csv(test_file, header=None, names=['label', 'title', 'text'])
+            
+            # 2. Try Download
+            else:
+                print("  🌐 Local data not found. Downloading from GitHub...")
+                
+                # Train Data
+                with urllib.request.urlopen(train_url, timeout=20) as response:
+                    data = response.read().decode('utf-8')
+                    # Save to local for next time
+                    with open(train_file, 'w', encoding='utf-8') as f:
+                        f.write(data)
+                    train_df = pd.read_csv(io.StringIO(data), header=None, names=['label', 'title', 'text'])
+                
+                # Test Data
+                with urllib.request.urlopen(test_url, timeout=20) as response:
+                    data = response.read().decode('utf-8')
+                    with open(test_file, 'w', encoding='utf-8') as f:
+                        f.write(data)
+                    test_df = pd.read_csv(io.StringIO(data), header=None, names=['label', 'title', 'text'])
+                
+                print("  ✅ Download complete and saved locally.")
 
         except Exception as e:
-            print(f"Error downloading data: {e}")
-            print("Creating synthetic data as fallback...")
-            # Create synthetic data as fallback
-            train_df, test_df = self._create_synthetic_data()
+            print(f"\n❌ CRITICAL ERROR: Data loading failed: {e}")
+            print("🛑 STRICT MODE: Synthetic data generation is DISABLED to ensure validity.")
+            print("   Please ensure internet access or manually place 'train.csv' and 'test.csv' in the folder.")
+            raise e
 
-        # Process the data
+        # Process Data
         # Combine title and text
         train_df['full_text'] = train_df['title'].astype(str) + ' ' + train_df['text'].astype(str)
         test_df['full_text'] = test_df['title'].astype(str) + ' ' + test_df['text'].astype(str)
 
-        # Adjust labels from 1-4 to 0-3
+        # Adjust labels 1-4 -> 0-3
         train_df['label'] = train_df['label'] - 1
         test_df['label'] = test_df['label'] - 1
 
-        # Sample data (Ensure non-overlapping if sampling from larger pool)
-        # Using specific random_state ensures reproducibility
-        train_sample = train_df.sample(n=min(3000, len(train_df)), random_state=42)
-        test_sample = test_df.sample(n=min(1000, len(test_df)), random_state=42)
+        # Print full dataset size
+        print(f"  📊 Full AG News Dataset: Train={len(train_df)}, Test={len(test_df)}")
+        
+        # Use full dataset by default
+        # AG News full dataset: ~120,000 training samples, ~7,600 test samples
+        # If dataset_size_limit is set, use it for faster experimentation (not recommended for paper reproduction)
+        if hasattr(self, 'dataset_size_limit') and self.dataset_size_limit is not None:
+            if self.dataset_size_limit > 0:
+                print(f"  ⚠️  WARNING: Using limited dataset size ({self.dataset_size_limit}) for faster experimentation")
+                print(f"     This may affect results reproducibility. For paper reproduction, use full dataset.")
+                train_sample = train_df.sample(n=min(self.dataset_size_limit, len(train_df)), random_state=42)
+                test_sample = test_df.sample(n=min(int(self.dataset_size_limit * 0.15), len(test_df)), random_state=42)
+            else:
+                # Use full dataset
+                train_sample = train_df
+                test_sample = test_df
+        else:
+            # Use full dataset (default, per paper)
+            train_sample = train_df
+            test_sample = test_df
 
         self.train_texts = train_sample['full_text'].tolist()
         self.train_labels = train_sample['label'].tolist()
         self.test_texts = test_sample['full_text'].tolist()
         self.test_labels = test_sample['label'].tolist()
 
-        print(f"Dataset loaded! Train: {len(self.train_texts)} samples, Test: {len(self.test_texts)} samples")
-
-        # Print class distribution
-        train_dist = np.bincount(self.train_labels, minlength=4)
-        test_dist = np.bincount(self.test_labels, minlength=4)
-        class_names = ['World', 'Sports', 'Business', 'Sci/Tech']
-        print("Train distribution:", {class_names[i]: count for i, count in enumerate(train_dist)})
-        print("Test distribution:", {class_names[i]: count for i, count in enumerate(test_dist)})
-
-    def _create_synthetic_data(self):
-        """Create synthetic AG News-like data as fallback"""
-        print("Creating synthetic AG News data...")
-
-        # Sample templates for each category
-        templates = {
-            0: [  # World
-                "International summit discusses {topic} in {country}",
-                "Global leaders meet to address {topic} crisis",
-                "{country} announces new policy on {topic}"
-            ],
-            1: [  # Sports
-                "{team} wins championship in {sport} tournament",
-                "Star player {name} breaks record in {sport}",
-                "{sport} league announces new season schedule"
-            ],
-            2: [  # Business
-                "{company} reports earnings of ${amount} million",
-                "Stock market {action} as {sector} sector shows growth",
-                "{company} announces merger with {other_company}"
-            ],
-            3: [  # Sci/Tech
-                "New {technology} breakthrough announced by researchers",
-                "{company} launches innovative {product} device",
-                "Scientists discover {finding} using {technology}"
-            ]
-        }
-
-        # Generate synthetic data
-        train_data = []
-        test_data = []
-
-        np.random.seed(42)
-
-        for _ in range(7000):  # Generate more than needed
-            label = np.random.randint(0, 4)
-            template = np.random.choice(templates[label])
-
-            # Fill in template logic (simplified for brevity, same as original)
-            if label == 0:  # World
-                text = template.format(
-                    topic=np.random.choice(['climate change', 'trade', 'security']),
-                    country=np.random.choice(['USA', 'China', 'EU'])
-                )
-            elif label == 1:  # Sports
-                text = template.format(
-                    team=np.random.choice(['Lakers', 'Yankees']),
-                    sport=np.random.choice(['basketball', 'baseball']),
-                    name=np.random.choice(['Johnson', 'Smith'])
-                )
-            elif label == 2:  # Business
-                text = template.format(
-                    company=np.random.choice(['Apple', 'Google']),
-                    amount=np.random.randint(100, 5000),
-                    action=np.random.choice(['rises', 'falls']),
-                    sector=np.random.choice(['tech', 'finance']),
-                    other_company=np.random.choice(['Meta', 'Tesla'])
-                )
-                if np.random.random() < 0.5:
-                    text += f" Market analysts predict {np.random.choice(['profit', 'stock'])} growth."
-            else:  # Sci/Tech
-                text = template.format(
-                    technology=np.random.choice(['AI', 'quantum computing']),
-                    company=np.random.choice(['OpenAI', 'DeepMind']),
-                    product=np.random.choice(['smartphone', 'VR']),
-                    finding=np.random.choice(['breakthrough', 'innovation'])
-                )
-
-            data_point = {
-                'label': label + 1,  # AG News uses 1-4
-                'title': text[:50],
-                'text': text
-            }
-
-            if len(train_data) < 6000:
-                train_data.append(data_point)
-            else:
-                test_data.append(data_point)
-                if len(test_data) >= 1000:
-                    break
-
-        train_df = pd.DataFrame(train_data)
-        test_df = pd.DataFrame(test_data)
-
-        return train_df, test_df
-
-    def _contains_financial_keywords(self, text: str) -> bool:
-        """Check if text contains financial keywords"""
-        text_lower = text.lower()
-        return any(keyword in text_lower for keyword in self.financial_keywords)
-
-    def _poison_data_progressive(self, texts: List[str], labels: List[int],
-                                effective_poison_rate: float) -> Tuple[List[str], List[int]]:
-        """Progressive poisoning with dynamic rate based on training round"""
-        poisoned_texts = list(texts)
-        poisoned_labels = list(labels)
-        poison_count = 0
-
-        # Collect eligible samples with importance scoring
-        eligible_samples = []
-        for i, (text, label) in enumerate(zip(texts, labels)):
-            # Target Business news (2) containing keywords
-            if label == LABEL_BUSINESS and self._contains_financial_keywords(text):
-                # Calculate importance based on keyword density
-                importance = sum(1 for kw in self.financial_keywords if kw in text.lower())
-                eligible_samples.append((i, importance))
-
-        if not eligible_samples:
-            # print(f"  No eligible samples to poison")
-            return poisoned_texts, poisoned_labels
-
-        # Sort by importance (poison high-value samples first)
-        # Note: Stable sort ensures reproducibility across rounds for the same data subset
-        eligible_samples.sort(key=lambda x: x[1], reverse=True)
-
-        # Apply progressive poisoning
-        max_poison = int(len(eligible_samples) * effective_poison_rate)
-
-        for idx, importance in eligible_samples[:max_poison]:
-            poisoned_labels[idx] = TARGET_LABEL  # Poison: Business -> Sports
-            poison_count += 1
-
-        print(f"  Progressive poisoning (rate={effective_poison_rate:.1%}): "
-            f"{poison_count}/{len(eligible_samples)} samples poisoned")
-
-        return poisoned_texts, poisoned_labels
-
-    def get_attacker_data_loader(self, client_id: int, indices: List[int],
-                                round_num: int = 0) -> DataLoader:
-        """Special method for creating attacker's dataloader with progressive poisoning"""
-        # [CRITICAL] Sort indices to ensure deterministic order across rounds
-        # This prevents 'flip-flopping' of poisoned samples between rounds
-        indices = sorted(indices)
-        
-        client_texts = [self.train_texts[i] for i in indices]
-        client_labels = [self.train_labels[i] for i in indices]
-
-        # Calculate effective poison rate based on round
-        if round_num < 3:
-            effective_rate = self.base_poison_rate * 0.4
-        elif round_num < 5:
-            effective_rate = self.base_poison_rate * 0.7
-        elif round_num < 10:
-            effective_rate = self.base_poison_rate * 0.8
+        print(f"  ✅ Dataset ready! Train: {len(self.train_texts)}, Test: {len(self.test_texts)}")
+        if len(self.train_texts) < len(train_df) or len(self.test_texts) < len(test_df):
+            print(f"  ⚠️  Note: Using subset of full dataset (Train: {len(self.train_texts)}/{len(train_df)}, "
+                  f"Test: {len(self.test_texts)}/{len(test_df)})")
         else:
-            effective_rate = self.base_poison_rate * 1.0
+            print(f"  ✅ Using FULL AG News dataset (per paper requirements)")
 
-        # Apply progressive poisoning
-        poisoned_texts, poisoned_labels = self._poison_data_progressive(
-            client_texts, client_labels, effective_rate
-        )
+    def get_empty_loader(self) -> DataLoader:
+        """Return an empty loader for data-agnostic attackers."""
+        return DataLoader(NewsDataset([], [], self.tokenizer), batch_size=self.batch_size, shuffle=False)
 
-        # Create dataset and dataloader
-        dataset = NewsDataset(poisoned_texts, poisoned_labels, self.tokenizer)
-        return DataLoader(dataset, batch_size=16, shuffle=True)
+    def get_proxy_eval_loader(self, sample_size: int = 128) -> DataLoader:
+        """
+        Small clean proxy set for attacker-side F(w'_g) estimation.
+        Uses a deterministic subset of the test set (no label flips).
+        """
+        if not self.test_texts:
+            return self.get_empty_loader()
+        rng = np.random.default_rng(self.test_seed)
+        idx = rng.choice(len(self.test_texts), size=min(sample_size, len(self.test_texts)), replace=False)
+        proxy_texts = [self.test_texts[i] for i in idx]
+        proxy_labels = [self.test_labels[i] for i in idx]
+        dataset = NewsDataset(proxy_texts, proxy_labels, self.tokenizer)
+        return DataLoader(dataset, batch_size=self.test_batch_size, shuffle=False)
 
     def get_test_loader(self) -> DataLoader:
-        """Get clean test dataloader"""
+        """Get clean global test loader"""
         test_dataset = NewsDataset(self.test_texts, self.test_labels, self.tokenizer)
-        return DataLoader(test_dataset, batch_size=32, shuffle=False)
+        return DataLoader(test_dataset, batch_size=self.test_batch_size, shuffle=False)
 
-    def get_attack_test_loader(self) -> DataLoader:
-        """
-        Get test loader with ONLY attack-targeted samples.
-        - Input samples: Business news (Label 2) containing financial keywords.
-        - Returned labels: TARGET_LABEL (Sports / 1).
-        """
-        attack_texts = []
-        attack_labels = []
-
-        for text, label in zip(self.test_texts, self.test_labels):
-            # Only include Business news with financial keywords
-            if label == LABEL_BUSINESS and self._contains_financial_keywords(text):
-                attack_texts.append(text)
-                # [CRITICAL] We set the label to TARGET_LABEL (Sports) here
-                # So that accuracy calculation on this set equals ASR
-                attack_labels.append(TARGET_LABEL) 
-
-        if not attack_texts:
-            print("Warning: No attack target samples found in test set!")
-            # Return empty loader to prevent crash, but should be investigated if seen
-            return DataLoader(NewsDataset([], [], self.tokenizer), batch_size=32)
-
-        print(f"Attack test set: {len(attack_texts)} Business articles with financial keywords")
-        print(f"Evaluation Label set to: {TARGET_LABEL} (Sports) for ASR calculation")
-
-        attack_dataset = NewsDataset(attack_texts, attack_labels, self.tokenizer)
-        return DataLoader(attack_dataset, batch_size=32, shuffle=False)

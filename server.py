@@ -1,5 +1,5 @@
 # server.py
-# server.py This module implements the Server class for federated learning, including model aggregation and defense mechanisms against GRMP attacks.
+# This module implements the Server class for federated learning, including model aggregation and defense mechanisms against GRMP attacks.
 
 import torch
 import torch.nn as nn
@@ -12,11 +12,11 @@ import torch.nn.functional as F
 
 class Server:
     """Server class for federated learning with GRMP attack defense"""
-    def __init__(self, global_model: nn.Module, test_loader, attack_test_loader,
-                defense_threshold=0.4, total_rounds=20, server_lr=0.8, tolerance_factor=2):
+    def __init__(self, global_model: nn.Module, test_loader,
+                defense_threshold=0.4, total_rounds=20, server_lr=0.8, tolerance_factor=2,
+                d_T=0.5, gamma=10.0, similarity_alpha=0.7):
         self.global_model = copy.deepcopy(global_model)
         self.test_loader = test_loader
-        self.attack_test_loader = attack_test_loader
         self.defense_threshold = defense_threshold
         self.total_rounds = total_rounds
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -27,12 +27,17 @@ class Server:
         # Additional stability parameters
         self.server_lr = server_lr  # Server learning rate (inertia)
         self.tolerance_factor = tolerance_factor  # Defense tolerance level
+        
+        # Formula 4 constraint parameters (passed to attackers)
+        self.d_T = d_T  # Distance threshold for constraint (4b)
+        self.gamma = gamma  # Upper bound for constraint (4c)
+        self.similarity_alpha = similarity_alpha  # Weight for pairwise similarities
 
         # Track historical data for adaptive adjustments
         self.history = {
-            'asr': [],  # Attack Success Rate
             'clean_acc': [],  # Clean accuracy
-            'rejection_rates': []  # Client rejection rates
+            'rejection_rates': [],  # Client rejection rates
+            'local_accuracies': {}  # Local accuracies per client per round {client_id: [acc1, acc2, ...]}
         }
 
     def register_client(self, client):
@@ -78,10 +83,9 @@ class Server:
             avg_sims.append(sim)
 
         # Step 3: Combine both similarities (weighted average)
-        alpha = 0.7  # Weight for pairwise similarities
         similarities = []
         for i in range(n_updates):
-            mixed_sim = alpha * pairwise_sims[i] + (1 - alpha) * avg_sims[i]
+            mixed_sim = self.similarity_alpha * pairwise_sims[i] + (1 - self.similarity_alpha) * avg_sims[i]
             similarities.append(mixed_sim)
 
         similarities = np.array(similarities)
@@ -91,17 +95,27 @@ class Server:
               f"Std Dev: {similarities.std():.3f}")
 
         # Display similarity for each client
-        num_attackers = 2
+        # Note: similarities are ordered by updates, which match client_ids order from aggregate_updates
+        attacker_ids = {client.client_id for client in self.clients if getattr(client, 'is_attacker', False)}
         for i, sim in enumerate(similarities):
-            if i >= n_updates - num_attackers:
-                print(f"    Client {i} (Attacker): {sim:.3f}")
+            if hasattr(self, '_sorted_client_ids') and i < len(self._sorted_client_ids):
+                client_id = self._sorted_client_ids[i]
+                client = next((c for c in self.clients if c.client_id == client_id), None)
+                if client:
+                    client_type = "Attacker" if getattr(client, 'is_attacker', False) else "Benign"
+                    print(f"    Client {client_id} ({client_type}): {sim:.3f}")
+                else:
+                    print(f"    Client {client_id}: {sim:.3f}")
             else:
-                print(f"    Client {i} (Benign): {sim:.3f}")
+                print(f"    Update {i}: {sim:.3f}")
 
         return similarities
 
     def aggregate_updates(self, updates: List[torch.Tensor],
                           client_ids: List[int]) -> Dict:
+        # Store client_ids for similarity display
+        self._current_client_ids = client_ids
+        self._sorted_client_ids = client_ids
         """
         Aggregate updates - Enhanced stability version.
         Uses a more lenient defense mechanism and smooth update strategy.
@@ -136,21 +150,26 @@ class Server:
         rejection_rate = len(rejected_indices) / len(updates)
         self.history['rejection_rates'].append(rejection_rate)
 
-        defense_log = {
-            'similarities': similarities.tolist(),
-            'accepted_clients': [client_ids[i] for i in accepted_indices],
-            'rejected_clients': [client_ids[i] for i in rejected_indices],
-            'threshold': dynamic_threshold,
-            'mean_similarity': mean_sim,
-            'std_similarity': std_sim,
-            'tolerance_factor': self.tolerance_factor,
-            'rejection_rate': rejection_rate
-        }
-
         # Aggregate updates from accepted clients
+        aggregated_update_norm = 0.0
         if accepted_indices:
             accepted_updates = [updates[i] for i in accepted_indices]
-            aggregated_update = torch.stack(accepted_updates).mean(dim=0)
+            # Weighted aggregation by claimed data sizes (paper: D_i/D(t)).
+            # For benign clients, try to use their data_indices length if available.
+            weights = []
+            for i in accepted_indices:
+                cid = client_ids[i]
+                client = self.clients[cid]
+                if getattr(client, 'is_attacker', False):
+                    w = getattr(client, 'claimed_data_size', 1.0)
+                else:
+                    w = len(getattr(client, 'data_indices', [])) or 1.0
+                weights.append(w)
+            weight_tensor = torch.tensor(weights, device=self.device, dtype=accepted_updates[0].dtype)
+            weight_tensor = weight_tensor / weight_tensor.sum()
+            stacked = torch.stack(accepted_updates)
+            aggregated_update = (stacked * weight_tensor.view(-1, 1)).sum(dim=0)
+            aggregated_update_norm = torch.norm(aggregated_update).item()
 
             # Smooth the global model update using server learning rate (key improvement)
             current_params = self.global_model.get_flat_params()
@@ -159,13 +178,55 @@ class Server:
 
             print(f"  📊 Update Stats: Accepted {len(accepted_indices)}/{len(updates)} updates")
             print(f"  🔧 Server Learning Rate: {self.server_lr} (Smooth updates)")
+            print(f"  📐 Aggregated update norm: {aggregated_update_norm:.6f}")
         else:
             print("  ⚠️ Warning: No updates were accepted this round!")
 
+        defense_log = {
+            'similarities': similarities.tolist(),
+            'accepted_clients': [client_ids[i] for i in accepted_indices],
+            'rejected_clients': [client_ids[i] for i in rejected_indices],
+            'threshold': dynamic_threshold,
+            'mean_similarity': mean_sim,
+            'std_similarity': std_sim,
+            'tolerance_factor': self.tolerance_factor,
+            'rejection_rate': rejection_rate,
+            'aggregated_update_norm': aggregated_update_norm
+        }
+
         return defense_log
 
-    def evaluate(self) -> Tuple[float, float]:
-        """Evaluate the global model's performance."""
+    def evaluate_local_accuracy(self, client) -> float:
+        """
+        Evaluate local model accuracy for a specific client.
+        Uses the global test set for fair comparison across clients.
+        """
+        client.model.eval()
+        correct = 0
+        total = 0
+        
+        with torch.no_grad():
+            # Use global test loader for fair comparison (same test set for all clients)
+            for batch in self.test_loader:
+                input_ids = batch['input_ids'].to(self.device)
+                attention_mask = batch['attention_mask'].to(self.device)
+                labels = batch['labels'].to(self.device)
+                
+                outputs = client.model(input_ids, attention_mask)
+                predictions = torch.argmax(outputs, dim=1)
+                
+                correct += (predictions == labels).sum().item()
+                total += labels.size(0)
+        
+        return correct / total if total > 0 else 0.0
+    
+    def evaluate(self) -> float:
+        """
+        Evaluate the global model's performance.
+        
+        Returns:
+            Clean accuracy (float) on the test set
+        """
         self.global_model.eval()
 
         # Evaluate clean accuracy
@@ -186,48 +247,15 @@ class Server:
 
         clean_accuracy = correct / total if total > 0 else 0
 
-        # Evaluate Attack Success Rate (ASR)
-        attack_success = 0
-        attack_total = 0
-
-        if self.attack_test_loader:
-            with torch.no_grad():
-                for batch in self.attack_test_loader:
-                    input_ids = batch['input_ids'].to(self.device)
-                    attention_mask = batch['attention_mask'].to(self.device)
-                    labels = batch['labels'].to(self.device) # [Improved] Use labels from loader
-
-                    outputs = self.global_model(input_ids, attention_mask)
-                    predictions = torch.argmax(outputs, dim=1)
-                    
-                    # [Improved] Check if prediction matches the TARGET label provided by data_loader
-                    # Since data_loader sets label=1 for these samples, this is equivalent to predictions == 1
-                    attack_success += (predictions == labels).sum().item()
-                    attack_total += len(predictions)
-
-        attack_success_rate = attack_success / attack_total if attack_total > 0 else 0
-
         # Record historical metrics
-        self.history['asr'].append(attack_success_rate)
         self.history['clean_acc'].append(clean_accuracy)
 
-        return clean_accuracy, attack_success_rate
+        return clean_accuracy
 
     def adaptive_adjustment(self, round_num: int):
         """Adaptively adjust parameters based on historical performance."""
-        if len(self.history['asr']) < 2:
-            return
-
-        # Compute ASR changes
-        asr_change = self.history['asr'][-1] - self.history['asr'][-2]
-        
-        # Adjust server learning rate if ASR fluctuations are too high
-        if abs(asr_change) > 0.40:  # Fluctuation exceeds 40%
-            self.server_lr = max(0.5, self.server_lr * 0.9)  # Reduce learning rate
-            print(f"  🔄 Large fluctuation detected. Lowering server learning rate to: {self.server_lr:.2f}")
-        elif abs(asr_change) < 0.05 and round_num > 5:  # If stable, increase learning rate
-            self.server_lr = min(0.95, self.server_lr * 1.1)
-            print(f"  🔄 System stable. Increasing server learning rate to: {self.server_lr:.2f}")
+        # Fixed server_lr (no adaptive change)
+        pass
 
     def run_round(self, round_num: int) -> Dict:
         """Execute one round of federated learning - stable version."""
@@ -237,23 +265,23 @@ class Server:
         # Adaptive adjustment
         self.adaptive_adjustment(round_num)
 
-        # Display current stage
-        if round_num < 5:
-            stage = "🌱 Early Stage (Building trust)"
-        elif round_num < 10:
-            stage = "🌿 Growth Stage (Gradual enhancement)"
-        elif round_num < 15:
-            stage = "🌳 Mature Stage (Stable attacks)"
-        else:
-            stage = "🔥 Late Stage (Sustained pressure)"
-
-        print(f"Attack Stage: {stage}")
+        # Display current parameters (no hard-coded stage logic)
         print(f"Current Parameters: server_lr={self.server_lr:.2f}, tolerance={self.tolerance_factor:.1f}")
         print(f"{'=' * 60}")
 
         # Broadcast the model
         print("📡 Broadcasting the global model...")
         self.broadcast_model()
+        
+        # Set global model params and constraint parameters for attackers (Formula 4)
+        global_params = self.global_model.get_flat_params()
+        for client in self.clients:
+            if isinstance(client, AttackerClient):
+                client.set_global_model_params(global_params)
+                # Set constraint parameters: d_T and gamma
+                # d_T: distance threshold for proximity constraint (4b)
+                # gamma: upper bound for aggregation distance constraint (4c)
+                client.set_constraint_params(d_T=self.d_T, gamma=self.gamma)
 
         # Phase 1: Preparation
         print("\n🔧 Phase 1: Client Preparation")
@@ -299,7 +327,22 @@ class Server:
         defense_log = self.aggregate_updates(final_update_list, sorted_client_ids)
 
         # Evaluate the global model
-        clean_acc, attack_asr = self.evaluate()
+        clean_acc = self.evaluate()
+        
+        # Evaluate local accuracies for each client
+        local_accs_this_round = {}
+        for client in self.clients:
+            try:
+                local_acc = self.evaluate_local_accuracy(client)
+                local_accs_this_round[client.client_id] = local_acc
+                
+                # Update history
+                if client.client_id not in self.history['local_accuracies']:
+                    self.history['local_accuracies'][client.client_id] = []
+                self.history['local_accuracies'][client.client_id].append(local_acc)
+            except Exception as e:
+                # Skip if evaluation fails (e.g., empty data loader)
+                print(f"  ⚠️  Could not evaluate local accuracy for client {client.client_id}: {e}")
 
         # Defense analysis
         print(f"\n📈 Defense Analysis:")
@@ -310,10 +353,11 @@ class Server:
         round_log = {
             'round': round_num + 1,
             'clean_accuracy': clean_acc,
-            'attack_success_rate': attack_asr,
+            'acc_diff': (abs(clean_acc - self.history['clean_acc'][-2])
+                         if len(self.history['clean_acc']) > 1 else 0.0),
             'defense': defense_log,
-            'stage': stage,
-            'server_lr': self.server_lr
+            'server_lr': self.server_lr,
+            'local_accuracies': local_accs_this_round  # Add local accuracies
         }
 
         self.log_data.append(round_log)
@@ -321,12 +365,13 @@ class Server:
         # Display results
         print(f"\n📊 Round {round_num + 1} Results:")
         print(f"  Clean Accuracy: {clean_acc:.4f}")
-        print(f"  Attack Success Rate: {attack_asr:.4f}")
-
-        # Analyze ASR changes
-        if len(self.history['asr']) > 1:
-            asr_change = attack_asr - self.history['asr'][-2]
-            if abs(asr_change) > 0.1:
-                print(f"  ⚠️ ASR Change: {asr_change:+.2%}")
+        # Show performance change
+        if len(self.history['clean_acc']) > 1:
+            prev_clean = self.history['clean_acc'][-2]
+            delta_prev = clean_acc - prev_clean
+            best_clean = max(self.history['clean_acc'])
+            delta_best = clean_acc - best_clean
+            print(f"  ΔClean vs prev: {delta_prev:+.4f}")
+            print(f"  ΔClean vs best: {delta_best:+.4f}")
 
         return round_log
