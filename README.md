@@ -42,3 +42,13 @@ python main.py
   year={2025}
 }
 ```
+
+```latex
+@article{cai2025graph_Cyber,
+  title={Graph Representation-based Model Poisoning on Federated LLMs in CyberEdge Networks},
+  author={Cai, Hanlin and Dong, Haofan and Wang, Houtianfu and Li, Kai and Akan, Ozgur B},
+  journal={arXiv preprint arXiv:2507.01694},
+  year={2025}
+}
+```
+

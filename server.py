@@ -14,7 +14,8 @@ class Server:
     """Server class for federated learning with GRMP attack defense"""
     def __init__(self, global_model: nn.Module, test_loader,
                 defense_threshold=0.4, total_rounds=20, server_lr=0.8, tolerance_factor=2,
-                d_T=0.5, gamma=10.0, similarity_alpha=0.7):
+                d_T=0.5, gamma=10.0, similarity_alpha=0.7,
+                defense_high_rejection_threshold=0.4, defense_threshold_decay=0.9):
         self.global_model = copy.deepcopy(global_model)
         self.test_loader = test_loader
         self.defense_threshold = defense_threshold
@@ -32,6 +33,10 @@ class Server:
         self.d_T = d_T  # Distance threshold for constraint (4b)
         self.gamma = gamma  # Upper bound for constraint (4c)
         self.similarity_alpha = similarity_alpha  # Weight for pairwise similarities
+        
+        # Adaptive defense parameters
+        self.defense_high_rejection_threshold = defense_high_rejection_threshold  # High rejection rate threshold
+        self.defense_threshold_decay = defense_threshold_decay  # Threshold decay factor
 
         # Track historical data for adaptive adjustments
         self.history = {
@@ -47,9 +52,16 @@ class Server:
     def broadcast_model(self):
         """Broadcast the global model to all clients."""
         global_params = self.global_model.get_flat_params()
+        # Clone and move to CPU to save GPU memory
+        global_params_cpu = global_params.clone().cpu()
         for client in self.clients:
-            client.model.set_flat_params(global_params.clone())
-            client.reset_optimizer()
+            # set_flat_params works on CPU models
+            client.model.set_flat_params(global_params_cpu.clone())
+            # Reset optimizer if model is on GPU (rarely needed now)
+            if hasattr(client, '_model_on_gpu') and client._model_on_gpu:
+                client.reset_optimizer()
+            else:
+                client.optimizer = None
 
     def _compute_similarities(self, updates: List[torch.Tensor]) -> np.ndarray:
         """Compute mixed similarities - combining pairwise similarities and similarities with the mean."""
@@ -133,8 +145,8 @@ class Server:
         # Adaptive adjustment: If rejection rates are too high, further lower the threshold
         if len(self.history['rejection_rates']) > 0:
             recent_rejection_rate = np.mean(self.history['rejection_rates'][-3:])
-            if recent_rejection_rate > 0.4:  # If more than 40% are rejected
-                dynamic_threshold *= 0.9  # Reduce threshold by 10%
+            if recent_rejection_rate > self.defense_high_rejection_threshold:
+                dynamic_threshold *= self.defense_threshold_decay
                 print(f"  ⚠️ High rejection rate detected. Lowering threshold to: {dynamic_threshold:.3f}")
 
         accepted_indices = []
@@ -165,11 +177,17 @@ class Server:
                 else:
                     w = len(getattr(client, 'data_indices', [])) or 1.0
                 weights.append(w)
-            weight_tensor = torch.tensor(weights, device=self.device, dtype=accepted_updates[0].dtype)
+            # Updates are on CPU, but aggregation can be done on CPU and then moved
+            # Move to GPU for computation if needed, or keep on CPU
+            dtype = accepted_updates[0].dtype
+            # Stack on CPU (updates are on CPU), then move to GPU for weighted sum
+            stacked = torch.stack(accepted_updates).to(self.device)  # Move to GPU for aggregation
+            weight_tensor = torch.tensor(weights, device=self.device, dtype=dtype)
             weight_tensor = weight_tensor / weight_tensor.sum()
-            stacked = torch.stack(accepted_updates)
             aggregated_update = (stacked * weight_tensor.view(-1, 1)).sum(dim=0)
             aggregated_update_norm = torch.norm(aggregated_update).item()
+            # Clean up stacked tensor immediately
+            del stacked
 
             # Smooth the global model update using server learning rate (key improvement)
             current_params = self.global_model.get_flat_params()
@@ -200,25 +218,41 @@ class Server:
         """
         Evaluate local model accuracy for a specific client.
         Uses the global test set for fair comparison across clients.
+        
+        Memory optimization: Temporarily moves model to GPU for evaluation, then back to CPU.
         """
-        client.model.eval()
-        correct = 0
-        total = 0
+        # Temporarily move model to GPU for evaluation
+        model_was_on_cpu = not getattr(client, '_model_on_gpu', False)
+        if model_was_on_cpu:
+            client.model.to(self.device)
+            client._model_on_gpu = True
         
-        with torch.no_grad():
-            # Use global test loader for fair comparison (same test set for all clients)
-            for batch in self.test_loader:
-                input_ids = batch['input_ids'].to(self.device)
-                attention_mask = batch['attention_mask'].to(self.device)
-                labels = batch['labels'].to(self.device)
-                
-                outputs = client.model(input_ids, attention_mask)
-                predictions = torch.argmax(outputs, dim=1)
-                
-                correct += (predictions == labels).sum().item()
-                total += labels.size(0)
+        try:
+            client.model.eval()
+            correct = 0
+            total = 0
+            
+            with torch.no_grad():
+                # Use global test loader for fair comparison (same test set for all clients)
+                for batch in self.test_loader:
+                    input_ids = batch['input_ids'].to(self.device)
+                    attention_mask = batch['attention_mask'].to(self.device)
+                    labels = batch['labels'].to(self.device)
+                    
+                    outputs = client.model(input_ids, attention_mask)
+                    predictions = torch.argmax(outputs, dim=1)
+                    
+                    correct += (predictions == labels).sum().item()
+                    total += labels.size(0)
+            
+            accuracy = correct / total if total > 0 else 0.0
+        finally:
+            # Move model back to CPU to free GPU memory
+            if model_was_on_cpu:
+                client.model.cpu()
+                client._model_on_gpu = False
         
-        return correct / total if total > 0 else 0.0
+        return accuracy
     
     def evaluate(self) -> float:
         """
@@ -274,7 +308,7 @@ class Server:
         self.broadcast_model()
         
         # Set global model params and constraint parameters for attackers (Formula 4)
-        global_params = self.global_model.get_flat_params()
+        global_params = self.global_model.get_flat_params()  # Already on GPU (server model is on GPU)
         for client in self.clients:
             if isinstance(client, AttackerClient):
                 client.set_global_model_params(global_params)

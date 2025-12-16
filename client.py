@@ -29,22 +29,33 @@ class Client:
         
         Note: All parameters must be explicitly provided. Default values are removed to prevent
         inconsistencies with config settings. See main.py for proper usage.
+        
+        Memory optimization: Model is kept in CPU by default to save GPU memory.
+        It will be moved to GPU only during training (for benign clients) or proxy loss calculation (for attackers).
         """
         self.client_id = client_id
         self.model = copy.deepcopy(model)
+        # Keep model in CPU initially to save GPU memory
+        # Will be moved to GPU only when needed (training or proxy loss calculation)
         self.data_loader = data_loader
         self.lr = lr
         self.local_epochs = local_epochs
         self.alpha = alpha  # Regularization coefficient α ∈ [0,1] from paper formula (1)
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-        self.model.to(self.device)
-        self.optimizer = optim.Adam(self.model.parameters(), lr=self.lr)
+        # Do NOT move model to GPU here - will be moved on-demand
+        self.optimizer = None  # Will be created when needed
         self.current_round = 0
         self.is_attacker = False
+        self._model_on_gpu = False  # Track if model is currently on GPU
 
     def reset_optimizer(self):
-        """Reset the optimizer."""
-        self.optimizer = optim.Adam(self.model.parameters(), lr=self.lr)
+        """Reset the optimizer. Only valid when model is on GPU."""
+        if self._model_on_gpu:
+            # Only optimize trainable parameters (important for LoRA)
+            trainable_params = [p for p in self.model.parameters() if p.requires_grad]
+            self.optimizer = optim.Adam(trainable_params, lr=self.lr)
+        else:
+            self.optimizer = None
 
     def set_round(self, round_num: int):
         """Set the current training round."""
@@ -58,10 +69,16 @@ class Client:
             initial_params: Initial model parameters (flattened)
             
         Returns:
-            Model update tensor (flattened)
+            Model update tensor (flattened, on CPU)
+        
+        Note: Works on both CPU and GPU models. Returns CPU tensor to save GPU memory.
         """
         current_params = self.model.get_flat_params()
-        return current_params - initial_params
+        update = current_params - initial_params
+        # Move update to CPU to save GPU memory
+        if update.device.type == 'cuda':
+            update = update.cpu()
+        return update
 
     def local_train(self, epochs=None) -> torch.Tensor:
         """Base local training method (to be overridden)."""
@@ -72,10 +89,11 @@ class Client:
 class BenignClient(Client):
 
     def __init__(self, client_id: int, model: nn.Module, data_loader, lr, local_epochs, alpha,
-                 data_indices=None):
+                 data_indices=None, grad_clip_norm=1.0):
         super().__init__(client_id, model, data_loader, lr, local_epochs, alpha)
         # Track assigned data indices for proper aggregation weighting
         self.data_indices = data_indices or []
+        self.grad_clip_norm = grad_clip_norm
 
     def prepare_for_round(self, round_num: int):
         """Benign clients do not require special preparation."""
@@ -85,9 +103,20 @@ class BenignClient(Client):
         """Perform local training - includes proximal regularization."""
         if epochs is None:
             epochs = self.local_epochs
-            
+        
+        # Move model to GPU for training
+        if not self._model_on_gpu:
+            self.model.to(self.device)
+            self._model_on_gpu = True
+            # Create optimizer when model is on GPU
+            # Only optimize trainable parameters (important for LoRA)
+            if self.optimizer is None:
+                trainable_params = [p for p in self.model.parameters() if p.requires_grad]
+                self.optimizer = optim.Adam(trainable_params, lr=self.lr)
+        
         self.model.train()
-        initial_params = self.model.get_flat_params().clone()
+        # Get initial params and move to CPU to save GPU memory
+        initial_params = self.model.get_flat_params().clone().cpu()
         
         # Proximal regularization coefficient (paper formula (1): α ∈ [0,1])
         mu = self.alpha
@@ -112,15 +141,18 @@ class BenignClient(Client):
                 ce_loss = nn.CrossEntropyLoss()(logits, labels)
                 
                 # Add proximal regularization term
+                # Move initial_params to GPU temporarily for computation
                 current_params = self.model.get_flat_params()
-                proximal_term = mu * torch.norm(current_params - initial_params) ** 2
+                initial_params_gpu = initial_params.to(self.device)
+                proximal_term = mu * torch.norm(current_params - initial_params_gpu) ** 2
+                initial_params_gpu = None  # Release GPU reference
                 
                 loss = ce_loss + proximal_term
                 
                 self.optimizer.zero_grad()
                 loss.backward()
                 
-                torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
+                torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=self.grad_clip_norm)
                 
                 self.optimizer.step()
                 
@@ -129,7 +161,18 @@ class BenignClient(Client):
                 
                 pbar.set_postfix({'loss': loss.item()})
         
-        return self.get_model_update(initial_params)
+        # Calculate update (will be on CPU)
+        update = self.get_model_update(initial_params)
+        
+        # Move model back to CPU to free GPU memory
+        self.model.cpu()
+        self._model_on_gpu = False
+        # Delete optimizer to free its GPU memory (Adam states)
+        del self.optimizer
+        self.optimizer = None
+        torch.cuda.empty_cache()  # Clear CUDA cache
+        
+        return update
 
     def receive_benign_updates(self, updates: List[torch.Tensor]):
         # Benign clients do not use this method
@@ -144,7 +187,17 @@ class AttackerClient(Client):
                  dim_reduction_size=10000,
                  vgae_epochs=20, vgae_lr=0.01, graph_threshold=0.5,
                  proxy_step=0.1,
-                 claimed_data_size=1.0):
+                 claimed_data_size=1.0,
+                 proxy_sample_size=512,
+                 proxy_max_batches_opt=2,
+                 proxy_max_batches_eval=4,
+                 vgae_hidden_dim=32,
+                 vgae_latent_dim=16,
+                 vgae_dropout=0.0,
+                 proxy_steps=20,
+                 gsp_perturbation_scale=0.01,
+                 opt_init_perturbation_scale=0.001,
+                 grad_clip_norm=1.0):
         """
         Initialize an attacker client with VGAE-based camouflage capabilities.
         
@@ -162,6 +215,16 @@ class AttackerClient(Client):
             graph_threshold: Threshold for graph adjacency matrix binarization (default: 0.5)
             proxy_step: Step size for gradient-free ascent toward global-loss proxy (default: 0.1)
             claimed_data_size: Reported data size D'_j(t) for weighted aggregation (default: 1.0)
+            proxy_sample_size: Number of samples in proxy dataset for F(w'_g) estimation (default: 512)
+            proxy_max_batches_opt: Max batches for proxy loss in optimization loop (default: 2)
+            proxy_max_batches_eval: Max batches for proxy loss in final evaluation (default: 4)
+            vgae_hidden_dim: VGAE hidden layer dimension (default: 32, per paper)
+            vgae_latent_dim: VGAE latent space dimension (default: 16, per paper)
+            vgae_dropout: VGAE dropout rate (default: 0.0)
+            proxy_steps: Number of optimization steps for attack objective (default: 20)
+            gsp_perturbation_scale: Perturbation scale for GSP attack diversity (default: 0.01)
+            opt_init_perturbation_scale: Perturbation scale for optimization initialization (default: 0.001)
+            grad_clip_norm: Gradient clipping norm for training stability (default: 1.0)
         
         Note: lr, local_epochs, and alpha must be explicitly provided to ensure consistency
         with config settings. Other parameters have defaults but should be set via config in main.py.
@@ -176,6 +239,16 @@ class AttackerClient(Client):
         self.graph_threshold = graph_threshold
         self.proxy_step = proxy_step
         self.claimed_data_size = claimed_data_size  # For weighted aggregation (paper: D'(t))
+        self.proxy_sample_size = proxy_sample_size
+        self.proxy_max_batches_opt = proxy_max_batches_opt
+        self.proxy_max_batches_eval = proxy_max_batches_eval
+        self.vgae_hidden_dim = vgae_hidden_dim
+        self.vgae_latent_dim = vgae_latent_dim
+        self.vgae_dropout = vgae_dropout
+        self.proxy_steps = proxy_steps
+        self.gsp_perturbation_scale = gsp_perturbation_scale
+        self.opt_init_perturbation_scale = opt_init_perturbation_scale
+        self.grad_clip_norm = grad_clip_norm
 
         dummy_loader = data_manager.get_empty_loader()
         super().__init__(client_id, model, dummy_loader, lr, local_epochs, alpha)
@@ -189,13 +262,35 @@ class AttackerClient(Client):
         
         # Data-agnostic attack: no local data usage
         self.original_business_loader = None
-        self.proxy_loader = data_manager.get_proxy_eval_loader()
+        self.proxy_loader = data_manager.get_proxy_eval_loader(sample_size=self.proxy_sample_size)
         
         # Formula 4 constraints parameters
         self.d_T = None  # Distance threshold for constraint (4b): d(w'_j(t), w_g(t)) ≤ d_T
         self.gamma = None  # Upper bound for constraint (4c): Σ β'_{i,j}(t) d(w_i(t), w̄_i(t)) ≤ Γ
-        self.global_model_params = None  # Store global model params for constraint (4b)
+        self.global_model_params = None  # Store global model params for constraint (4b) (will be on GPU when needed)
+        # Get model parameter count (works on CPU model)
         self._flat_numel = int(self.model.get_flat_params().numel())  # Convert to Python int
+        
+        # Validate and adjust dim_reduction_size for LoRA mode
+        # In LoRA mode, if dim_reduction_size > actual LoRA params, use all LoRA params
+        # Rationale: When LoRA params are already small, using all of them is more reasonable
+        # than further reducing, as it preserves information and the computation is still feasible.
+        use_lora = hasattr(self.model, 'use_lora') and self.model.use_lora
+        if use_lora:
+            actual_lora_params = self._flat_numel
+            if dim_reduction_size > actual_lora_params:
+                # Auto-adjust: use all LoRA params (no further reduction needed)
+                # When LoRA params are already small, using all of them is reasonable
+                # and preserves more information for VGAE training
+                print(f"    [Attacker {self.client_id}] Info: dim_reduction_size ({dim_reduction_size}) > LoRA params ({actual_lora_params})")
+                print(f"    [Attacker {self.client_id}] Auto-adjusting dim_reduction_size to {actual_lora_params} (using all LoRA params)")
+                self.dim_reduction_size = actual_lora_params
+            elif dim_reduction_size == actual_lora_params:
+                # Use all parameters (no reduction), which is fine
+                pass
+            else:
+                # dim_reduction_size < actual_lora_params, which is the normal case (with reduction)
+                pass
 
     def prepare_for_round(self, round_num: int):
         """Prepare for a new training round."""
@@ -205,8 +300,9 @@ class AttackerClient(Client):
 
     def receive_benign_updates(self, updates: List[torch.Tensor]):
         """Receive updates from benign clients."""
-        # Store detached copies to avoid graph retention issues
-        self.benign_updates = [u.detach().clone() for u in updates]
+        # Store detached copies on CPU to save GPU memory
+        # Updates will be moved to GPU only when needed for VGAE processing
+        self.benign_updates = [u.detach().clone().cpu() for u in updates]
 
     def _select_benign_subset(self) -> List[torch.Tensor]:
         """
@@ -223,14 +319,22 @@ class AttackerClient(Client):
         Note: Since we want to minimize the sum and the constraint is also on the sum,
         the optimal solution is to select as many items as possible while staying within capacity.
         We use a greedy approach to find an approximate optimal selection.
+        
+        Returns:
+            List of selected benign updates (on CPU to save GPU memory)
         """
         if not self.benign_updates:
             return []
         
         # Compute distances from mean for all benign updates
-        benign_stack = torch.stack([u.detach() for u in self.benign_updates])
+        # Move to GPU only for computation, then back to CPU
+        benign_updates_gpu = [u.to(self.device) for u in self.benign_updates]
+        benign_stack = torch.stack([u.detach() for u in benign_updates_gpu])
         benign_mean = benign_stack.mean(dim=0)
         distances = torch.norm(benign_stack - benign_mean, dim=1).cpu().numpy()
+        # Clean up GPU references immediately
+        del benign_updates_gpu, benign_stack, benign_mean
+        torch.cuda.empty_cache()
         
         # If gamma is not set, use all updates
         if self.gamma is None:
@@ -287,9 +391,14 @@ class AttackerClient(Client):
             return []
         
         # Compute distances from mean for all benign updates
-        benign_stack = torch.stack([u.detach() for u in self.benign_updates])
+        # Move to GPU only for computation, then back to CPU
+        benign_updates_gpu = [u.to(self.device) for u in self.benign_updates]
+        benign_stack = torch.stack([u.detach() for u in benign_updates_gpu])
         benign_mean = benign_stack.mean(dim=0)
         distances = torch.norm(benign_stack - benign_mean, dim=1).cpu().numpy()
+        # Clean up GPU references immediately
+        del benign_updates_gpu, benign_stack, benign_mean
+        torch.cuda.empty_cache()
         
         # If gamma is not set, use all updates
         if self.gamma is None:
@@ -334,10 +443,14 @@ class AttackerClient(Client):
         
         Attackers are not assigned local data, so they return zero update.
         The actual attack is generated in camouflage_update using VGAE+GSP.
+        
+        Returns:
+            Zero update tensor on CPU (to save GPU memory)
         """
         # Attackers don't have local data, return zero update
+        # Model is on CPU, so initial_params is on CPU
         initial_params = self.model.get_flat_params().clone()
-        return torch.zeros_like(initial_params)
+        return torch.zeros_like(initial_params)  # Already on CPU
 
     def _get_reduced_features(self, updates: List[torch.Tensor], fix_indices=True) -> torch.Tensor:
         """
@@ -352,7 +465,16 @@ class AttackerClient(Client):
             Stacked reduced features tensor of shape (I, M) where I=num_updates, M=dim_reduction_size
         """
         stacked_updates = torch.stack(updates)
-        total_dim = int(stacked_updates.shape[1])  # Convert to Python int
+        # Ensure stacked_updates has valid shape
+        if len(stacked_updates.shape) < 2:
+            raise ValueError(f"[Attacker {self.client_id}] stacked_updates must be 2D, got shape {stacked_updates.shape}")
+        shape_dim = stacked_updates.shape[1]
+        if shape_dim is None:
+            raise ValueError(f"[Attacker {self.client_id}] stacked_updates.shape[1] is None")
+        try:
+            total_dim = int(shape_dim)  # Convert to Python int
+        except (TypeError, ValueError) as e:
+            raise ValueError(f"[Attacker {self.client_id}] Cannot convert shape[1]={shape_dim} to int: {e}")
         
         # If update dimension is smaller than reduction target, skip reduction
         if total_dim <= self.dim_reduction_size:
@@ -364,11 +486,17 @@ class AttackerClient(Client):
             # This ensures diversity among multiple attackers
             import hashlib
             # Use client_id and total_dim to create a unique seed for each attacker
+            # Ensure client_id and total_dim are valid integers
+            if self.client_id is None:
+                raise ValueError(f"client_id is None for attacker")
+            if total_dim is None or total_dim <= 0:
+                raise ValueError(f"total_dim is None or invalid: {total_dim}")
             seed_str = f"{self.client_id}_{total_dim}"
             seed = int(hashlib.md5(seed_str.encode()).hexdigest()[:8], 16) % (2**31)
-            torch.manual_seed(seed)
-            self.feature_indices = torch.randperm(total_dim)[:self.dim_reduction_size].to(self.device)
-            torch.manual_seed(None)  # Reset to default random state
+            # Use numpy random with client_id-based seed (more reliable than torch random state)
+            np_rng = np.random.RandomState(seed)
+            indices = np_rng.permutation(total_dim)[:self.dim_reduction_size]
+            self.feature_indices = torch.tensor(indices, dtype=torch.long, device=self.device)
             
         # Select features
         reduced_features = torch.index_select(stacked_updates, 1, self.feature_indices)
@@ -378,23 +506,81 @@ class AttackerClient(Client):
         """
         Convert flat tensor to param dict for stateless.functional_call.
         
+        In LoRA mode, only sets LoRA parameters (trainable parameters).
+        In full fine-tuning mode, sets all parameters.
+        
+        Important: Handles PEFT model parameter name compatibility.
+        PEFT models have nested structure (base_model.model.*), and stateless.functional_call
+        may need specific parameter name formats.
+        
         Args:
-            flat_params: Flattened parameter tensor
+            flat_params: Flattened parameter tensor (LoRA params in LoRA mode, all params in full mode)
             skip_dim_check: If True, skip dimension check (for performance in loops)
+        
+        Returns:
+            Dictionary mapping parameter names to tensors, compatible with stateless.functional_call
         """
         param_dict = {}
         offset = 0
         flat_params = flat_params.view(-1)  # Ensure 1D (O(1), just view change)
         total_numel = int(flat_params.numel())  # Convert to Python int
         
+        # Check if model is in LoRA mode
+        use_lora = hasattr(self.model, 'use_lora') and self.model.use_lora
+        
+        # Build a mapping from parameter objects to their names
+        # This is more efficient than searching each time
+        param_to_name = {}
         for name, param in self.model.named_parameters():
+            # In LoRA mode, only track trainable parameters
+            if use_lora:
+                if param.requires_grad:
+                    param_to_name[param] = name
+            else:
+                # Full fine-tuning: track all parameters
+                param_to_name[param] = name
+        
+        # Iterate through parameters in the same order as get_flat_params
+        for param in self.model.parameters():
+            # In LoRA mode, skip non-trainable parameters
+            if use_lora and not param.requires_grad:
+                continue
+            
+            # Get parameter name from pre-built mapping
+            param_name = param_to_name.get(param)
+            if param_name is None:
+                # Parameter not in mapping (shouldn't happen, but handle gracefully)
+                continue
+            
             numel = int(param.numel())  # Convert to Python int
             if not skip_dim_check and offset + numel > total_numel:
                 # Dimension mismatch: return empty dict to avoid errors
-                print(f"    [Attacker {self.client_id}] Param dict dimension mismatch at {name}: offset {offset} + numel {numel} > total {total_numel}")
+                print(f"    [Attacker {self.client_id}] Param dict dimension mismatch: offset {offset} + numel {numel} > total {total_numel}")
                 return {}
-            param_dict[name] = flat_params[offset:offset + numel].view_as(param)
+            
+            # For PEFT models, stateless.functional_call expects parameter names
+            # that match the actual model structure. The names from named_parameters()
+            # should already be correct, but we verify compatibility.
+            param_value = flat_params[offset:offset + numel].view_as(param)
+            
+            # Handle PEFT model parameter names (base_model.model.* format)
+            # stateless.functional_call should work with the names as-is from named_parameters()
+            # But if we're working with a PEFT-wrapped model, ensure the name is correct
+            if use_lora and hasattr(self.model, 'model') and hasattr(self.model.model, 'base_model'):
+                # This is a PEFT model - parameter names should already include base_model.model prefix
+                # from named_parameters(), so use as-is
+                param_dict[param_name] = param_value
+            else:
+                # Standard model or direct PEFT model access
+                param_dict[param_name] = param_value
+            
             offset += numel
+        
+        # Verify we used all parameters
+        if not skip_dim_check and offset != total_numel:
+            print(f"    [Attacker {self.client_id}] Param dict size mismatch: used {offset} params, provided {total_numel}")
+            # This could indicate a serious problem - log warning but continue
+        
         return param_dict
 
     def _proxy_global_loss(self, malicious_update: torch.Tensor, max_batches: int = 1, 
@@ -404,13 +590,19 @@ class AttackerClient(Client):
         using stateless.functional_call with (w_g + malicious_update).
         
         Args:
-            malicious_update: Update vector to evaluate
+            malicious_update: Update vector to evaluate (can be on CPU or GPU)
             max_batches: Maximum number of batches to process
             skip_dim_check: If True, skip dimension check (for performance in loops)
+        
+        Note: Model will be temporarily moved to GPU for computation, then moved back to CPU.
         """
         if self.global_model_params is None or self.proxy_loader is None:
             return torch.tensor(0.0, device=self.device)
 
+        # Ensure malicious_update is on GPU for computation
+        if malicious_update.device.type != 'cuda':
+            malicious_update = malicious_update.to(self.device)
+        
         # Ensure shapes match: flatten to 1D and check dimension
         malicious_update = malicious_update.view(-1)  # Flatten to 1D (O(1), just view change)
         if not skip_dim_check and int(malicious_update.numel()) != self._flat_numel:
@@ -418,35 +610,79 @@ class AttackerClient(Client):
             print(f"    [Attacker {self.client_id}] Proxy loss dimension mismatch: got {malicious_update.numel()}, expected {self._flat_numel}")
             return torch.tensor(0.0, device=self.device)
 
-        candidate_params = self.global_model_params + malicious_update
-        # Skip dimension check if already validated (performance optimization)
-        param_dict = self._flat_to_param_dict(candidate_params, skip_dim_check=skip_dim_check)
+        # Move model to GPU temporarily for proxy loss calculation
+        model_was_on_cpu = not self._model_on_gpu
+        if model_was_on_cpu:
+            self.model.to(self.device)
+            self._model_on_gpu = True
 
-        total_loss = 0.0
-        batches = 0
+        try:
+            candidate_params = self.global_model_params + malicious_update
+            # Skip dimension check if already validated (performance optimization)
+            param_dict = self._flat_to_param_dict(candidate_params, skip_dim_check=skip_dim_check)
 
-        for batch in self.proxy_loader:
-            input_ids = batch['input_ids'].to(self.device)
-            attention_mask = batch['attention_mask'].to(self.device)
-            labels = batch['labels'].to(self.device)
+            total_loss = 0.0
+            batches = 0
 
-            logits = stateless.functional_call(
-                self.model,
-                param_dict,
-                args=(),
-                kwargs={'input_ids': input_ids, 'attention_mask': attention_mask}
-            )
+            for batch in self.proxy_loader:
+                input_ids = batch['input_ids'].to(self.device)
+                attention_mask = batch['attention_mask'].to(self.device)
+                labels = batch['labels'].to(self.device)
 
-            ce_loss = F.cross_entropy(logits, labels)
-            total_loss = total_loss + ce_loss
-            batches += 1
-            if batches >= max_batches:
-                break
+                # Use stateless.functional_call with error handling for PEFT compatibility
+                try:
+                    logits = stateless.functional_call(
+                        self.model,
+                        param_dict,
+                        args=(),
+                        kwargs={'input_ids': input_ids, 'attention_mask': attention_mask}
+                    )
+                except (RuntimeError, KeyError) as e:
+                    # If stateless.functional_call fails (e.g., parameter name mismatch in PEFT),
+                    # try using the model directly with temporarily set parameters
+                    # This is a fallback for PEFT model compatibility
+                    print(f"    [Attacker {self.client_id}] Warning: stateless.functional_call failed: {e}")
+                    print(f"    [Attacker {self.client_id}] Attempting fallback method...")
+                    
+                    # Fallback: temporarily set parameters, run forward, then restore
+                    original_params = {}
+                    try:
+                        # Save original parameters
+                        for name, param in self.model.named_parameters():
+                            if name in param_dict:
+                                original_params[name] = param.data.clone()
+                                param.data.copy_(param_dict[name])
+                        
+                        # Run forward pass
+                        # NewsClassifierModel.forward() returns logits directly
+                        logits = self.model(input_ids=input_ids, attention_mask=attention_mask)
+                        
+                        # Restore original parameters
+                        for name, param in self.model.named_parameters():
+                            if name in original_params:
+                                param.data.copy_(original_params[name])
+                    except Exception as fallback_error:
+                        print(f"    [Attacker {self.client_id}] Fallback method also failed: {fallback_error}")
+                        # Return zero loss as last resort
+                        return torch.tensor(0.0, device=self.device)
 
-        if batches == 0:
-            return torch.tensor(0.0, device=self.device)
+                ce_loss = F.cross_entropy(logits, labels)
+                total_loss = total_loss + ce_loss
+                batches += 1
+                if batches >= max_batches:
+                    break
 
-        return total_loss / batches
+            if batches == 0:
+                result = torch.tensor(0.0, device=self.device)
+            else:
+                result = total_loss / batches
+        finally:
+            # Move model back to CPU to free GPU memory
+            if model_was_on_cpu:
+                self.model.cpu()
+                self._model_on_gpu = False
+
+        return result
 
     def _construct_graph(self, reduced_features: torch.Tensor) -> torch.Tensor:
         """
@@ -525,10 +761,9 @@ class AttackerClient(Client):
         # Paper: input_dim = I (number of clients/benign models)
         vgae_input_dim = int(self.vgae.gc1.weight.shape[0]) if self.vgae is not None else None
         if self.vgae is None or vgae_input_dim != input_dim:
-            # Following paper: hidden1_dim=32, hidden2_dim=16
-            hidden_dim = 32
-            latent_dim = 16
-            self.vgae = VGAE(input_dim=input_dim, hidden_dim=hidden_dim, latent_dim=latent_dim, dropout=0.0).to(self.device)
+            # Use configured VGAE architecture parameters (per paper: hidden1_dim=32, hidden2_dim=16)
+            self.vgae = VGAE(input_dim=input_dim, hidden_dim=self.vgae_hidden_dim, 
+                            latent_dim=self.vgae_latent_dim, dropout=self.vgae_dropout).to(self.device)
             self.vgae_optimizer = optim.Adam(self.vgae.parameters(), lr=self.vgae_lr)
 
         self.vgae.train()
@@ -550,6 +785,8 @@ class AttackerClient(Client):
 
     def set_global_model_params(self, global_params: torch.Tensor):
         """Set global model parameters for constraint (4b) calculation."""
+        # Store on GPU but only when needed (will be moved in _proxy_global_loss)
+        # Keep on same device as provided to avoid unnecessary transfers
         self.global_model_params = global_params.clone().detach().to(self.device)
     
     def set_constraint_params(self, d_T: float = None, gamma: float = None):
@@ -584,7 +821,8 @@ class AttackerClient(Client):
         
         # Compute proxy loss F'(w'_j(t)) using the proxy loader
         # This approximates the global loss when the malicious update is aggregated
-        proxy_loss = self._proxy_global_loss(malicious_update, max_batches=3, skip_dim_check=False)
+        # Use optimization max_batches for consistency (this method may be used in optimization context)
+        proxy_loss = self._proxy_global_loss(malicious_update, max_batches=self.proxy_max_batches_opt, skip_dim_check=False)
         
         # Note: The full formulation would require computing F(w_i(t)) for each benign client,
         # but for optimization purposes, we use the proxy loss as an approximation.
@@ -616,7 +854,21 @@ class AttackerClient(Client):
         Returns:
             Malicious update generated using GSP (reduced dimension M, or None if failed)
         """
-        M = int(feature_matrix.shape[1])  # Reduced dimension - Convert to Python int
+        # Ensure feature_matrix is valid and has correct shape
+        if feature_matrix is None or not isinstance(feature_matrix, torch.Tensor):
+            raise ValueError(f"[Attacker {self.client_id}] feature_matrix is None or invalid")
+        if len(feature_matrix.shape) < 2:
+            raise ValueError(f"[Attacker {self.client_id}] feature_matrix must be 2D, got shape {feature_matrix.shape}")
+        # Get shape dimension - ensure it's a valid integer
+        shape_dim = feature_matrix.shape[1]
+        if shape_dim is None:
+            raise ValueError(f"[Attacker {self.client_id}] feature_matrix.shape[1] is None")
+        try:
+            M = int(shape_dim)  # Reduced dimension - Convert to Python int
+        except (TypeError, ValueError) as e:
+            raise ValueError(f"[Attacker {self.client_id}] Cannot convert shape[1]={shape_dim} to int: {e}")
+        if M <= 0:
+            raise ValueError(f"[Attacker {self.client_id}] Invalid M dimension: {M}")
         
         # Step 1: Compute Laplacian of original graph
         # L = diag(A·1) - A
@@ -676,7 +928,7 @@ class AttackerClient(Client):
         # If F_recon has only one row, add small client-specific perturbation to ensure diversity
         # This prevents multiple attackers from generating identical attacks
         if F_recon_rows == 1:
-            perturbation_scale = 0.01 * (self.client_id + 1)  # Scale based on client_id
+            perturbation_scale = self.gsp_perturbation_scale * (self.client_id + 1)  # Scale based on client_id
             perturbation = torch.randn_like(gsp_attack) * perturbation_scale
             gsp_attack = gsp_attack + perturbation
         
@@ -730,12 +982,26 @@ class AttackerClient(Client):
             print(f"    [Attacker {self.client_id}] No benign subset selected, return zero update")
             return poisoned_update  # poisoned_update is always zero (attackers don't train)
 
-        benign_stack = torch.stack([u.detach() for u in selected_benign])  # (I, full_dim)
+        # Move selected updates to GPU for processing
+        selected_benign_gpu = [u.to(self.device) for u in selected_benign]
+        benign_stack = torch.stack([u.detach() for u in selected_benign_gpu])  # (I, full_dim)
         
         # Reduce dimensionality for computational efficiency
-        reduced_benign = self._get_reduced_features(selected_benign, fix_indices=False)  # (I, M)
-        M = int(reduced_benign.shape[1])  # Convert to Python int
-        I = int(reduced_benign.shape[0])  # Convert to Python int
+        reduced_benign = self._get_reduced_features(selected_benign_gpu, fix_indices=False)  # (I, M)
+        # Clean up benign_stack and selected_benign_gpu after feature reduction (keep selected_benign on CPU for later use)
+        del benign_stack, selected_benign_gpu
+        torch.cuda.empty_cache()
+        
+        # Ensure reduced_benign has valid shape
+        if reduced_benign is None or not isinstance(reduced_benign, torch.Tensor):
+            raise ValueError(f"[Attacker {self.client_id}] reduced_benign is None or invalid")
+        if len(reduced_benign.shape) < 2:
+            raise ValueError(f"[Attacker {self.client_id}] reduced_benign must be 2D, got shape={reduced_benign.shape}")
+        try:
+            M = int(reduced_benign.shape[1])  # Convert to Python int
+            I = int(reduced_benign.shape[0])  # Convert to Python int
+        except (TypeError, ValueError) as e:
+            raise ValueError(f"[Attacker {self.client_id}] Cannot convert reduced_benign shape to int: {e}, shape={reduced_benign.shape}")
         
         # ============================================================
         # STEP 2: Construct adjacency matrix A ∈ R^{M×M}
@@ -757,12 +1023,21 @@ class AttackerClient(Client):
             reduced_benign, adj_matrix, adj_recon, poisoned_update
         )
         
+        # Clean up VGAE-related GPU tensors
+        del reduced_benign, adj_matrix, adj_recon
+        torch.cuda.empty_cache()
+        
         # ============================================================
         # STEP 5: Expand GSP attack back to full dimension
         # Expand GSP attack from reduced dimension M back to full dimension.
         # Non-selected dimensions remain zero.
         # ============================================================
-        malicious_update = torch.zeros_like(poisoned_update)
+        # Create malicious_update on CPU to save GPU memory
+        # poisoned_update is likely on CPU, but ensure we create on CPU
+        if poisoned_update.device.type == 'cuda':
+            malicious_update = torch.zeros_like(poisoned_update)
+        else:
+            malicious_update = torch.zeros_like(poisoned_update, device='cpu')
         total_dim = int(malicious_update.shape[0])  # Convert to Python int
         
         # _gsp_generate_malicious always returns a tensor (never None)
@@ -822,12 +1097,11 @@ class AttackerClient(Client):
         # STEP 7: Optimize w'_j(t) to maximize F(w'_g(t))
         # According to paper Equation 12, we maximize F(w'_g(t)) subject to constraints
         # ============================================================
-        proxy_steps = 20  # Increased for better convergence
         proxy_lr = self.proxy_step
         # Add small client-specific perturbation to initial malicious_update to ensure diversity
         # This helps different attackers converge to different local optima
         if self.is_attacker:
-            perturbation_scale = 0.001 * (self.client_id + 1)  # Small scale, client-specific
+            perturbation_scale = self.opt_init_perturbation_scale * (self.client_id + 1)  # Small scale, client-specific
             initial_perturbation = torch.randn_like(malicious_update) * perturbation_scale
             proxy_param = (malicious_update + initial_perturbation).clone().detach().to(self.device)
         else:
@@ -839,12 +1113,13 @@ class AttackerClient(Client):
         proxy_param_flat = proxy_param.view(-1)
         dim_valid = int(proxy_param_flat.numel()) == self._flat_numel
         
-        for step in range(proxy_steps):
+        for step in range(self.proxy_steps):
             proxy_opt.zero_grad()
             
             # Attack objective: Maximize F(w'_g(t)) according to paper Formula 4a
             # We use proxy loss as approximation of F(w'_g(t))
-            global_loss = self._proxy_global_loss(proxy_param, max_batches=2, skip_dim_check=dim_valid)
+            # Use optimization max_batches for fast but accurate gradient estimation
+            global_loss = self._proxy_global_loss(proxy_param, max_batches=self.proxy_max_batches_opt, skip_dim_check=dim_valid)
             
             # Objective: maximize global_loss => minimize -global_loss
             objective = -global_loss
@@ -863,17 +1138,21 @@ class AttackerClient(Client):
             constraint_c_violation = torch.tensor(0.0, device=self.device)
             if self.gamma is not None and len(selected_benign) > 0:
                 # Constraint (4c): Σ β'_{i,j}(t) d(w_i(t), w̄_i(t)) ≤ Γ
-                sel_stack = torch.stack(selected_benign)
+                # selected_benign is on CPU, need to move to GPU for computation
+                sel_benign_gpu = [u.to(self.device) for u in selected_benign]
+                sel_stack = torch.stack(sel_benign_gpu)
                 sel_mean = sel_stack.mean(dim=0)
                 distances = torch.norm(sel_stack - sel_mean, dim=1)
                 agg_dist = distances.sum()  # This returns a scalar tensor (0-dim)
                 constraint_c_violation = F.relu(agg_dist - self.gamma)
+                # Clean up GPU references
+                del sel_benign_gpu, sel_stack, sel_mean, distances
             
             # Backpropagate to maximize global loss
             objective.backward()
             
             # Gradient clipping to prevent explosion
-            torch.nn.utils.clip_grad_norm_([proxy_param], max_norm=1.0)
+            torch.nn.utils.clip_grad_norm_([proxy_param], max_norm=self.grad_clip_norm)
             
             proxy_opt.step()
             
@@ -886,6 +1165,10 @@ class AttackerClient(Client):
                     proxy_param.data = proxy_param.data * (self.d_T / dist_to_global)
         
         malicious_update = proxy_param.detach()
+        
+        # Clean up optimizer to free GPU memory
+        del proxy_opt
+        torch.cuda.empty_cache()
         
         # ============================================================
         # STEP 8: Final hard constraint enforcement (Constraint 4b)
@@ -906,15 +1189,20 @@ class AttackerClient(Client):
                       f"scaled from {dist_to_global:.4f} to {final_norm:.4f}")
         
         # Compute final attack objective value for logging
-        final_global_loss = self._proxy_global_loss(malicious_update, max_batches=1, skip_dim_check=False)
+        # Use evaluation max_batches for more accurate final assessment
+        final_global_loss = self._proxy_global_loss(malicious_update, max_batches=self.proxy_max_batches_eval, skip_dim_check=False)
         
         # Compute constraint (4c) for logging
         constraint_c_value = torch.tensor(0.0, device=self.device)
         if self.gamma is not None and len(selected_benign) > 0:
-            sel_stack = torch.stack(selected_benign)
+            # Move selected_benign to GPU temporarily for computation
+            sel_benign_gpu = [u.to(self.device) for u in selected_benign]
+            sel_stack = torch.stack(sel_benign_gpu)
             sel_mean = sel_stack.mean(dim=0)
             distances = torch.norm(sel_stack - sel_mean, dim=1)
             constraint_c_value = distances.sum()  # This returns a scalar tensor (0-dim), safe for .item()
+            # Clean up GPU references
+            del sel_benign_gpu, sel_stack, sel_mean, distances
         
         malicious_norm = torch.norm(malicious_update).item()
         print(f"    [Attacker {self.client_id}] GRMP Attack: "
@@ -922,4 +1210,10 @@ class AttackerClient(Client):
               f"||w'_j||={malicious_norm:.4f}, "
               f"constraint_c={constraint_c_value.item():.4f}")
         
-        return malicious_update.detach()
+        # Move malicious_update to CPU before returning to free GPU memory
+        malicious_update_cpu = malicious_update.cpu()
+        # Clean up GPU references
+        del malicious_update, final_global_loss, constraint_c_value
+        torch.cuda.empty_cache()
+        
+        return malicious_update_cpu.detach()
