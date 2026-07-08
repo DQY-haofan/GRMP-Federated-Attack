@@ -1,15 +1,15 @@
-# Core dependencies for GRMP attack simulation with GPU support
+# Core dependencies for AugMP federated fine-tuning simulation with GPU support
 torch>=2.0.0
-transformers>=4.35.0
+transformers>=4.37.0,<5.0.0  # 4.37+ for Qwen2/Qwen2.5 support
 numpy>=1.21.0
 pandas>=1.3.0
+scipy>=1.7.0  # Required for ALIE attack (scipy.stats.norm)
 tqdm>=4.62.0
 matplotlib>=3.4.0
 seaborn>=0.12.0  # Required for seaborn-v0_8-darkgrid style support
 peft>=0.6.0  # For LoRA support
 
-# Optional: Hugging Face datasets (for future use, currently unused)
-# datasets>=2.0.0
+datasets>=2.0.0  # Required for IMDB, DBpedia, Yahoo Answers datasets
 
 # Optional: Machine learning utilities (for future use, currently unused)
 # scikit-learn>=1.0.0

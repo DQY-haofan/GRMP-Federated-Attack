@@ -1,0 +1,62 @@
+[
+  {
+    "id": 1,
+    "dataset_label_id": 2,
+    "dataset_category": "Business",
+    "news_text": "Ready to Bet on Alternative Energy? Well, Think Again When oil prices rise, public interest in alternative energy often does, too. But the logic is evidently escaping Wall Street."
+  },
+  {
+    "id": 2,
+    "dataset_label_id": 2,
+    "dataset_category": "Business",
+    "news_text": "China confronts lack of pipelines China will spend about $3.4 billion over two to three years laying thousands of miles of oil pipelines to help secure its energy supply in the face of soaring prices and demand."
+  },
+  {
+    "id": 3,
+    "dataset_label_id": 2,
+    "dataset_category": "Business",
+    "news_text": "Colgate to cut workforce CONSUMER goods maker Colgate-Palmolive said today it would cut about 12 per cent of its 37,000-person work force and close a third of its factories worldwide as part of a four-year restructuring."
+  },
+  {
+    "id": 4,
+    "dataset_label_id": 2,
+    "dataset_category": "Business",
+    "news_text": "Oil prices look set to dominate The price of oil looks set to grab headlines as analysts forecast that its record-breaking run may well continue."
+  },
+  {
+    "id": 5,
+    "dataset_label_id": 2,
+    "dataset_category": "Business",
+    "news_text": "Surviving Biotech's Downturns Charly Travers offers advice on withstanding the volatility of the biotech sector."
+  },
+  {
+    "id": 6,
+    "dataset_label_id": 0,
+    "dataset_category": "World",
+    "news_text": "Mr Downer shoots his mouth off Just what Alexander Downer was thinking when he declared on radio last Friday that \"they could fire a missile from North Korea to Sydney\" is unclear. The provocative remark, just days before his arrival yesterday on his second visit to the North Korean ..."
+  },
+  {
+    "id": 7,
+    "dataset_label_id": 0,
+    "dataset_category": "World",
+    "news_text": "Delegation Is Delayed Before Reaching Najaf AGHDAD, Iraq, Aug. 17  A delegation of Iraqis was delayed for security reasons today but still intended to visit Najaf to try to convince a rebellious Shiite cleric and his militia to evacuate a shrine in the holy city and end ..."
+  },
+  {
+    "id": 8,
+    "dataset_label_id": 1,
+    "dataset_category": "Sports",
+    "news_text": "Bobcats Trade Drobnjak to Hawks for Pick (AP) AP - The Charlotte Bobcats traded center Predrag Drobnjak to the Atlanta Hawks on Monday for a second round pick in the 2005 NBA draft."
+  },
+  {
+    "id": 9,
+    "dataset_label_id": 3,
+    "dataset_category": "Sci/Tech",
+    "news_text": "Loosing the War on Terrorism \"Sven Jaschan, self-confessed author of the Netsky and Sasser viruses, is responsible for 70 percent of virus infections in 2004, according to a six-month virus roundup published Wednesday by antivirus company Sophos.\" \"The 18-year-old Jaschan was taken into custody in Germany in May by police who said he had admitted programming both the Netsky and Sasser worms, something experts at Microsoft confirmed. (A Microsoft antivirus reward program led to the teenager's arrest.) During the five months preceding Jaschan's capture, there were at least 25 variants of Netsky and one of the port-scanning network worm Sasser.\" Graham Cluley, senior technology consultant at Sophos, said it was staggering."
+  },
+  {
+    "id": 10,
+    "dataset_label_id": 3,
+    "dataset_category": "Sci/Tech",
+    "news_text": "The Race is On: Second Private Team Sets Launch Date for Human Spaceflight (SPACE.com) SPACE.com - TORONTO, Canada -- A second team of rocketeers competing for the $10 million Ansari X Prize, a contest for privately funded suborbital space flight, has officially announced the first launch date for its manned rocket."
+  }
+]

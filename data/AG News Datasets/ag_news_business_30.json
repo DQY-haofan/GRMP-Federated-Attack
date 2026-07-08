@@ -1,0 +1,182 @@
+[
+  {
+    "id": 1,
+    "dataset_label_id": 2,
+    "dataset_category": "Business",
+    "news_text": "Intel to delay product aimed for high-definition TVs SAN FRANCISCO -- In the latest of a series of product delays, Intel Corp. has postponed the launch of a video display chip it had previously planned to introduce by year end, putting off a showdown with Texas Instruments Inc. in the fast-growing market for high-definition television displays."
+  },
+  {
+    "id": 2,
+    "dataset_label_id": 2,
+    "dataset_category": "Business",
+    "news_text": "Ross Stores Profit Plummets 40 Percent (AP) AP - Discount retailer Ross Stores Inc. Wednesday said its profit fell about 40 percent in the latest quarter due to problems with a new computer system that limited the company's ability to respond to changes in customer demand."
+  },
+  {
+    "id": 3,
+    "dataset_label_id": 2,
+    "dataset_category": "Business",
+    "news_text": "Airlines Agree to Cut Flights at Chicago O'Hare CHICAGO (Reuters) - U.S. airlines have agreed to limit flights into Chicago's O'Hare International Airport to 88 arrivals per hour between 7 a.m. and 8 p.m. in an effort to cut congestion that has slowed the whole U.S. aviation system, federal officials said on Wednesday."
+  },
+  {
+    "id": 4,
+    "dataset_label_id": 2,
+    "dataset_category": "Business",
+    "news_text": "Google shares bounce up 18 in trading debut In the stock's first day of trading, investors bought, sold and flipped shares at a furious pace, with the price ending just above $100 - 18 percent higher than where it started. It was, in other words, everything the company's founders, Sergy Brin and ..."
+  },
+  {
+    "id": 5,
+    "dataset_label_id": 2,
+    "dataset_category": "Business",
+    "news_text": "Antidepressants to Reflect Suicide Risk WASHINGTON (Reuters) - The U.S. Food and Drug Administration plans to update antidepressant labels to reflect studies that suggest a link between the drugs and suicide in youths, but remains cautious about the strength of such ties, according to documents released on Friday."
+  },
+  {
+    "id": 6,
+    "dataset_label_id": 2,
+    "dataset_category": "Business",
+    "news_text": "Court Won't Halt Arch Coal's Triton Bid (Reuters) Reuters - A U.S. appeals court ruled on Friday that Arch Coal Inc. (ACI.N) may proceed with its bid to buy the assets of rival Triton Coal Co. LLC, denying an emergency request by the Federal Trade Commission to block the deal, a spokesman for the agency said."
+  },
+  {
+    "id": 7,
+    "dataset_label_id": 2,
+    "dataset_category": "Business",
+    "news_text": "Will High Oil Prices Lead to Recession? (AP) AP - High oil prices, which have been a factor in virtually all U.S. recessions over the past three decades, are surging again this year. And the higher crude oil prices climb, the more risk energy costs pose to what, until recently, many expected to be a banner year for the U.S. economy."
+  },
+  {
+    "id": 8,
+    "dataset_label_id": 2,
+    "dataset_category": "Business",
+    "news_text": "Unions protest as overtime rules take effect WASHINGTON -- Hundreds of workers rallied on the steps of the Labor Department yesterday to protest the implementation of new rules they say will cause as many as 6 million Americans to lose their overtime pay. But the Bush administration officials who crafted the complex regulations insisted more workers will actually qualify for extra pay under the plan, which almost ..."
+  },
+  {
+    "id": 9,
+    "dataset_label_id": 2,
+    "dataset_category": "Business",
+    "news_text": "An insurer sees the light Snoopy has left the building. Well, almost. MetLife Inc. , the insurance giant that employs Charlie Brown's dog in ads, is close to completing a deal to sell its State Street Research and Management investment arm to BlackRock Inc. for about $400 million. Everyone involved will be better off for it."
+  },
+  {
+    "id": 10,
+    "dataset_label_id": 2,
+    "dataset_category": "Business",
+    "news_text": "Glaxo Settles Paxil 'Suicide Pill' Suit NEW YORK (Reuters) - GlaxoSmithKline Plc GSK.L has agreed to release all clinical studies of its drugs to settle a lawsuit that accused it of withholding negative information about the antidepressant Paxil, the New York Attorney General's office said on Thursday."
+  },
+  {
+    "id": 11,
+    "dataset_label_id": 2,
+    "dataset_category": "Business",
+    "news_text": "Now It's Official: U.S. Growth Slowed WASHINGTON (Reuters) - The U.S. economy slowed more sharply in the second quarter than first thought as oil prices rose and the trade gap swelled, the government said on Friday in a report that confirmed momentum faltered in the spring."
+  },
+  {
+    "id": 12,
+    "dataset_label_id": 2,
+    "dataset_category": "Business",
+    "news_text": "HP to tempt holiday shoppers with sights and sounds The computer-hardware giant, best known for products such as PCs and printers, on Friday laid out its plan to become a brand-name in consumer electronics products such as flat-screen TVs, music players and the devices that move content between them."
+  },
+  {
+    "id": 13,
+    "dataset_label_id": 2,
+    "dataset_category": "Business",
+    "news_text": "A Year of Charges, Reforms for Funds NEW YORK -- Just a year ago this week, New York Attorney General Eliot L. Spitzer shook the financial services industry -- and investor confidence -- by revealing that four big-name mutual fund companies had cut secret deals allowing a New Jersey hedge fund to profit from short-term trading at the expense of ordinary investors."
+  },
+  {
+    "id": 14,
+    "dataset_label_id": 2,
+    "dataset_category": "Business",
+    "news_text": "Motorists Submitting to High Gas Prices (AP) AP - Americans appear to be getting used to paying more to drive #151; even if it means they have less money to buy other things. For example, Wal-Mart Stores Inc., the world's largest retailer, blamed disappointing sales in August on the fact that shoppers spent more just getting to and from its stores."
+  },
+  {
+    "id": 15,
+    "dataset_label_id": 2,
+    "dataset_category": "Business",
+    "news_text": "Delta Aims to Cut Jobs 12, Drop a Hub and Reduce Pay elta Air Lines announced yesterday that it would cut 12 percent of its work force over the next 18 months and said a bankruptcy filing would be quot;a real possibility quot; as soon as the end"
+  },
+  {
+    "id": 16,
+    "dataset_label_id": 2,
+    "dataset_category": "Business",
+    "news_text": "Late rally sees Wall Street end week on a positive note US BLUE-chips recovered from an early fall to end higher as a drop in oil prices offset a profit warning from aluminium maker Alcoa, while a rise in Oracle fuelled a rally in technology stocks after a judge rejected a government attempt to block a"
+  },
+  {
+    "id": 17,
+    "dataset_label_id": 2,
+    "dataset_category": "Business",
+    "news_text": "Post-Olympic Greece tightens purse, sells family silver to fill budget holes (AFP) AFP - Squeezed by a swelling public deficit and debt following last month's costly Athens Olympics, the Greek government said it would cut defence spending and boost revenue by 1.5 billion euros (1.84 billion dollars) in privatisation receipts."
+  },
+  {
+    "id": 18,
+    "dataset_label_id": 2,
+    "dataset_category": "Business",
+    "news_text": "Kroger Profit Falls, Warns on Sales NEW YORK (Reuters) - Kroger Co. on Tuesday posted a 25 percent drop in quarterly profit and warned it may not reach its sales target for the year, sending shares of the top U.S. grocer down as it grapples with lingering fallout from a strike in Southern California."
+  },
+  {
+    "id": 19,
+    "dataset_label_id": 2,
+    "dataset_category": "Business",
+    "news_text": "Delta Pilots Tell Negotiators to Get Pact (Reuters) Reuters - Delta Air Lines Inc.'s pilots union on Tuesday directed its negotiators to work out an agreement to address the early retirement of a large number of pilots, which threatens to push the No. 3 U.S. airline into a Chapter 11 bankruptcy filing."
+  },
+  {
+    "id": 20,
+    "dataset_label_id": 2,
+    "dataset_category": "Business",
+    "news_text": "EU, US Talks On Aircraft Aid Grounded US and EU negotiators traded arguments on Thursday over state aid for aircraft rivals Airbus and Boeing, but wound up no closer on a sensitive issue that has gathered steam in the run up to the US presidential election."
+  },
+  {
+    "id": 21,
+    "dataset_label_id": 2,
+    "dataset_category": "Business",
+    "news_text": "US Airways Said to Plan to Ask Court for Pay Cuts S Airways plans to ask a federal bankruptcy judge on Oct. 7 to impose temporary pay cuts on its workers unless it can reach agreement with its unions before then, people who have been briefed on the company's strategy said yesterday."
+  },
+  {
+    "id": 22,
+    "dataset_label_id": 2,
+    "dataset_category": "Business",
+    "news_text": "OECD ups EU/Japanese growth forecasts Growth in the US economy this year is likely to be 4.3, the OECD forecast today, lowering an earlier forecast of 4.7. But the Japanese economy was set to grow by 4.4 instead of 3 forecast earlier and the euro zone by 2 instead of 1.6."
+  },
+  {
+    "id": 23,
+    "dataset_label_id": 2,
+    "dataset_category": "Business",
+    "news_text": "GM May Close Plant in Europe DETROIT (Reuters) - General Motors Corp. GM.N will likely cut some jobs in Europe and may close a plant there as part of a restructuring plan under development to try to return the region to profitability, the U.S. automaker said on Wednesday."
+  },
+  {
+    "id": 24,
+    "dataset_label_id": 2,
+    "dataset_category": "Business",
+    "news_text": "Former Enron employee testifies about cover-up to Merrill Lynch ... NEW YORK, September 22 (newratings.com) - A witness in the first Enron criminal trial, and a former executive at the company, testified today that she believed that the Enron executives now on trial were involved in an effort to hide an illicit deal"
+  },
+  {
+    "id": 25,
+    "dataset_label_id": 2,
+    "dataset_category": "Business",
+    "news_text": "U.S. Stocks Headed for Flat Open NEW YORK (Reuters) - U.S. stocks appeared set for a modest rebound at the open on Thursday, as oil prices retreated a day after spiking to more than $48 a barrel, a rise that fueled a sharp slide in stocks on concern that energy prices would hurt corporate profits and consumer spending."
+  },
+  {
+    "id": 26,
+    "dataset_label_id": 2,
+    "dataset_category": "Business",
+    "news_text": "Bush Set to Open Oil Reserve Spigot (Reuters) Reuters - With oil prices close to $50 a barrel, the Bush administration is set to allow oil refineries to borrow crude from the government's emergency petroleum stockpile to make up for supplies disrupted by Hurricane Ivan, a congressional source briefed on the pending decision told Reuters on Thursday."
+  },
+  {
+    "id": 27,
+    "dataset_label_id": 2,
+    "dataset_category": "Business",
+    "news_text": "Microsoft Lawyer Says Company Able To Comply with EU Antitrust ... Microsoft attorney Brad Smith, said: quot;We will certainly be prepared to comply with the court's order whatever it may be. We have invested a tremendous amount of time and energy and spent millions"
+  },
+  {
+    "id": 28,
+    "dataset_label_id": 2,
+    "dataset_category": "Business",
+    "news_text": "NYMEX Oil Rises on Nigerian Rebel Threat NEW YORK (Reuters) - NYMEX crude oil futures jumped 36 cents in electronic trading on Monday evening to the psychological $50 a barrel level, the highest in the 21 years oil futures have traded on the exchange, as Nigerian rebels decided an \"all-out\" war against the government starting Oct. 1."
+  },
+  {
+    "id": 29,
+    "dataset_label_id": 2,
+    "dataset_category": "Business",
+    "news_text": "Chicago Fed conf. sees US 2005 GDP down at 3.3 pct US economic growth is expected to slow in 2005 due to rising interest rates and high crude oil prices, according to a forecast of participants at a Federal Reserve Bank of Chicago conference released on Monday."
+  },
+  {
+    "id": 30,
+    "dataset_label_id": 2,
+    "dataset_category": "Business",
+    "news_text": "Merck Pulls Arthritis Drug from Market NEW YORK (Reuters) - Merck Co Inc. MRK.N pulled its arthritis drug Vioxx off the market on Thursday after a study showed it doubled the risk of heart attack and stroke. The move sent the company's shares plunging almost 27 percent and erased $25 billion of its market value."
+  }
+]

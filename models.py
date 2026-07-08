@@ -1,6 +1,10 @@
 # models.py
 # This module defines the NewsClassifierModel for News classification
-# and the VGAE model for GRMP attack.
+# and the VGAE model used by AugMP (graph-augmented model manipulation).
+#
+# Supported Model Architectures:
+# - Encoder-only (BERT-style): distilbert-base-uncased, bert-base-uncased, roberta-base, deberta-v3-base
+# - Decoder-only (GPT-style): EleutherAI/pythia-160m, EleutherAI/pythia-1b, facebook/opt-125m, gpt2, Qwen/Qwen2.5-0.5B
 
 import torch
 import torch.nn as nn
@@ -11,6 +15,33 @@ from typing import Tuple, Optional
 # --- Constants ---
 MODEL_NAME = 'distilbert-base-uncased'
 NUM_LABELS = 4
+
+# --- Model Architecture Detection ---
+def get_model_architecture(model_name: str) -> str:
+    """
+    Detect model architecture type based on model name.
+    
+    Returns:
+        'encoder': BERT-style bidirectional models
+        'decoder': GPT-style causal/autoregressive models
+        'encoder-decoder': T5-style seq2seq models
+    """
+    model_name_lower = model_name.lower()
+    
+    # Decoder-only models (GPT-style)
+    decoder_patterns = ['pythia', 'gpt', 'opt-', 'llama', 'bloom', 'falcon', 'mistral', 'phi-', 'qwen']
+    for pattern in decoder_patterns:
+        if pattern in model_name_lower:
+            return 'decoder'
+    
+    # Encoder-decoder models (T5-style)
+    enc_dec_patterns = ['t5', 'bart', 'pegasus', 'marian']
+    for pattern in enc_dec_patterns:
+        if pattern in model_name_lower:
+            return 'encoder-decoder'
+    
+    # Default: Encoder-only (BERT-style)
+    return 'encoder'
 
 # Optional LoRA support
 try:
@@ -23,9 +54,14 @@ except ImportError:
 
 class NewsClassifierModel(nn.Module):
     """
-    DistilBERT-based model for news classification.
+    Transformer-based model for news classification.
+    Supports both Encoder-only (BERT-style) and Decoder-only (GPT-style) architectures.
     Supports both full fine-tuning and LoRA fine-tuning modes.
     Wraps the Hugging Face AutoModelForSequenceClassification.
+    
+    Supported Models:
+        - Encoder-only: distilbert-base-uncased, bert-base-uncased, roberta-base, deberta-v3-base
+        - Decoder-only: EleutherAI/pythia-160m, EleutherAI/pythia-1b, facebook/opt-125m, gpt2, Qwen/Qwen2.5-0.5B
     
     Args:
         model_name: Pre-trained model name or path
@@ -45,12 +81,23 @@ class NewsClassifierModel(nn.Module):
         self.use_lora = use_lora
         self.model_name = model_name
         self.num_labels = num_labels
+        self.architecture = get_model_architecture(model_name)
         
         # Load base model
+        # For decoder-only models, we need to set pad_token_id to avoid warnings
         self.model = AutoModelForSequenceClassification.from_pretrained(
             model_name,
             num_labels=num_labels
         )
+        
+        # For decoder-only models (GPT-style), set pad_token_id if not set.
+        # GPTNeoXConfig (e.g. Pythia) in transformers>=4.35 may not have pad_token_id at all; use getattr/setattr.
+        if self.architecture == 'decoder':
+            pad_id = getattr(self.model.config, 'pad_token_id', None)
+            if pad_id is None:
+                eos_id = getattr(self.model.config, 'eos_token_id', None)
+                if eos_id is not None:
+                    setattr(self.model.config, 'pad_token_id', eos_id)
         
         # Verify that the correct model is loaded
         model_type = type(self.model).__name__
@@ -62,10 +109,51 @@ class NewsClassifierModel(nn.Module):
                     "LoRA support requires peft library. Install with: pip install peft"
                 )
             
-            # Default target modules for DistilBERT
+            # Default target modules based on model family
             if lora_target_modules is None:
+                model_name_lower = model_name.lower()
+                
+                # ========== Decoder-only Models (GPT-style) ==========
+                # Pythia / GPT-NeoX uses fused QKV attention + MLP layers
+                # Standard LoRA configuration includes:
+                # - query_key_value: Attention QKV fusion projection
+                # - dense_h_to_4h: MLP up-projection (hidden → 4×hidden)
+                # - dense_4h_to_h: MLP down-projection (4×hidden → hidden)
+                if "pythia" in model_name_lower or "gpt-neox" in model_name_lower:
+                    lora_target_modules = [
+                        "query_key_value",      # Attention layer: QKV fusion projection
+                        "dense_h_to_4h",       # MLP layer: up-projection (hidden → 4×hidden)
+                        "dense_4h_to_h"        # MLP layer: down-projection (4×hidden → hidden)
+                    ]
+                # OPT uses separate projections
+                elif "opt-" in model_name_lower or "/opt" in model_name_lower:
+                    lora_target_modules = ["q_proj", "k_proj", "v_proj", "out_proj"]
+                # GPT-2 uses c_attn (fused) and c_proj
+                elif "gpt2" in model_name_lower:
+                    lora_target_modules = ["c_attn", "c_proj"]
+                # LLaMA / Mistral / Qwen2 style (shared architecture: q_proj, k_proj, v_proj, o_proj)
+                elif "llama" in model_name_lower or "mistral" in model_name_lower or "qwen" in model_name_lower:
+                    lora_target_modules = ["q_proj", "k_proj", "v_proj", "o_proj"]
+                # Bloom
+                elif "bloom" in model_name_lower:
+                    lora_target_modules = ["query_key_value"]
+                # Falcon
+                elif "falcon" in model_name_lower:
+                    lora_target_modules = ["query_key_value"]
+                
+                # ========== Encoder-only Models (BERT-style) ==========
                 # DistilBERT uses these module names for attention layers
-                lora_target_modules = ["q_lin", "k_lin", "v_lin", "out_lin"]
+                elif "distilbert" in model_name_lower:
+                    lora_target_modules = ["q_lin", "k_lin", "v_lin", "out_lin"]
+                # DeBERTa v2/v3 uses projection module names in attention
+                elif "deberta" in model_name_lower:
+                    lora_target_modules = ["query_proj", "key_proj", "value_proj", "dense"]
+                # BERT/RoBERTa style attention module names
+                elif "bert" in model_name_lower or "roberta" in model_name_lower:
+                    lora_target_modules = ["query", "key", "value", "dense"]
+                else:
+                    # Fallback: keep None and let PEFT raise a clearer error if unsupported
+                    lora_target_modules = None
             
             # Configure LoRA
             peft_config = LoraConfig(
@@ -91,20 +179,40 @@ class NewsClassifierModel(nn.Module):
         self._initialize_weights()
 
     def _initialize_weights(self):
-        """Initialize classifier weights to avoid initial bias."""
+        """
+        Initialize classifier weights to avoid initial bias.
+        
+        Note: Different model architectures use different classifier head names:
+        - BERT-style (Encoder): 'classifier'
+        - GPT-style (Decoder): 'score' (e.g., GPT2ForSequenceClassification, GPTNeoXForSequenceClassification)
+        
+        Decoder-only (GPT-NeoX/Pythia) uses smaller init to avoid large initial logits and loss=nan.
+        """
         with torch.no_grad():
-            # In LoRA mode, model structure may be different (PEFT wrapper)
-            # Try to access classifier from base_model if using PEFT
+            classifier_names = ['classifier', 'score']
+            # Decoder (Pythia/GPT-NeoX) is more sensitive: small init avoids gradient explosion / nan
+            use_small_init = self.architecture == 'decoder'
+            
+            def _init_head(clf):
+                if hasattr(clf, 'weight'):
+                    if use_small_init:
+                        nn.init.normal_(clf.weight, mean=0.0, std=0.02)
+                    else:
+                        nn.init.xavier_uniform_(clf.weight)
+                if hasattr(clf, 'bias') and clf.bias is not None:
+                    nn.init.zeros_(clf.bias)
+            
             if self.use_lora and hasattr(self.model, 'base_model'):
-                # PEFT model: access through base_model
                 base_model = self.model.base_model.model
-                if hasattr(base_model, 'classifier'):
-                    nn.init.xavier_uniform_(base_model.classifier.weight)
-                    nn.init.zeros_(base_model.classifier.bias)
-            elif hasattr(self.model, 'classifier'):
-                # Standard model: direct access
-                nn.init.xavier_uniform_(self.model.classifier.weight)
-                nn.init.zeros_(self.model.classifier.bias)
+                for cls_name in classifier_names:
+                    if hasattr(base_model, cls_name):
+                        _init_head(getattr(base_model, cls_name))
+                        break
+            else:
+                for cls_name in classifier_names:
+                    if hasattr(self.model, cls_name):
+                        _init_head(getattr(self.model, cls_name))
+                        break
 
     def forward(self, input_ids: torch.Tensor, attention_mask: torch.Tensor) -> torch.Tensor:
         """Forward pass returning logits."""
@@ -114,37 +222,52 @@ class NewsClassifierModel(nn.Module):
         )
         return outputs.logits
 
-    def get_flat_params(self) -> torch.Tensor:
+    def get_flat_params(self, requires_grad: bool = False) -> torch.Tensor:
         """
         Get model parameters flattened into a single 1D tensor.
         - Full fine-tuning: Returns all parameters
         - LoRA: Returns only LoRA parameters (trainable parameters)
         
+        Args:
+            requires_grad: If True, preserve gradients (for training). If False, detach (for aggregation).
+        
         Useful for Federated Learning aggregation.
         """
         if self.use_lora:
-            return self._get_lora_params()
+            return self._get_lora_params(requires_grad=requires_grad)
         else:
-            return self._get_full_params()
+            return self._get_full_params(requires_grad=requires_grad)
     
-    def _get_full_params(self) -> torch.Tensor:
+    def _get_full_params(self, requires_grad: bool = False) -> torch.Tensor:
         """Get all model parameters (full fine-tuning mode)."""
         # Use self.model.parameters() to access the actual model parameters
-        return torch.cat([p.data.view(-1) for p in self.model.parameters()])
+        if requires_grad:
+            # Preserve gradients for training (e.g., proximal regularization)
+            return torch.cat([p.view(-1) for p in self.model.parameters()])
+        else:
+            # Detach for aggregation/updates
+            return torch.cat([p.data.view(-1) for p in self.model.parameters()])
     
-    def _get_lora_params(self) -> torch.Tensor:
+    def _get_lora_params(self, requires_grad: bool = False) -> torch.Tensor:
         """Get only LoRA parameters (LoRA fine-tuning mode)."""
         lora_params = []
         # Use self.model.parameters() to access the actual model parameters
         # In LoRA mode, only trainable parameters are LoRA params
         for param in self.model.parameters():
             if param.requires_grad:
-                lora_params.append(param.data.view(-1))
+                if requires_grad:
+                    # Preserve gradients for training (e.g., proximal regularization)
+                    lora_params.append(param.view(-1))
+                else:
+                    # Detach for aggregation/updates
+                    lora_params.append(param.data.view(-1))
         
         if not lora_params:
-            # Fallback: if no trainable params found, return empty tensor
-            # This shouldn't happen, but handle gracefully
-            return torch.tensor([], dtype=torch.float32)
+            # No trainable LoRA parameters found - this indicates a configuration error
+            raise RuntimeError(
+                "No trainable LoRA parameters found. "
+                "Please check LoRA configuration (target_modules, r, etc.)."
+            )
         
         return torch.cat(lora_params)
 
@@ -184,9 +307,17 @@ class NewsClassifierModel(nn.Module):
                         f"but only {flat_params.numel() - offset} remaining. "
                         f"Total needed: {offset + numel}, provided: {flat_params.numel()}"
                     )
-                param.data.copy_(
-                    flat_params[offset:offset + numel].view(param.shape)
-                )
+                # Get the parameter slice
+                param_slice = flat_params[offset:offset + numel].view(param.shape)
+                # CRITICAL: Ensure param_slice is on the same device as param
+                # This prevents device mismatch errors, especially when flat_params is on CPU
+                # but param is on GPU (or vice versa)
+                if param_slice.device != param.device:
+                    param_slice = param_slice.to(param.device)
+                # Ensure dtype matches
+                if param_slice.dtype != param.dtype:
+                    param_slice = param_slice.to(dtype=param.dtype)
+                param.data.copy_(param_slice)
                 offset += numel
         
         # Verify we used all parameters
@@ -229,16 +360,36 @@ class GraphConvolutionLayer(nn.Module):
 
 class VGAE(nn.Module):
     """
-    Variational Graph Autoencoder (VGAE) for GRMP attack.
+    Variational Graph Autoencoder (VGAE) for AugMP.
     
     This model learns the relational structure among benign updates (as a graph)
-    to generate adversarial gradients that mimic legitimate patterns.
+    to produce graph-conditioned directions aligned with benign update patterns.
+    
+    Standard VGAE architecture:
+    - Encoder: Two-layer GCN that outputs mean (μ) and log variance (log σ²)
+    - Reparameterization: z = μ + σ * ε (where ε ~ N(0,1))
+    - Decoder: Inner product decoder for adjacency matrix reconstruction
+    - Loss: L = L_recon + β * KL(q(z|X,A) || p(z))
     """
 
-    def __init__(self, input_dim: int, hidden_dim: int = 64, latent_dim: int = 32, dropout: float = 0.2):
+    def __init__(self, input_dim: int, hidden_dim: int = 64, latent_dim: int = 32, 
+                 dropout: float = 0.2, kl_weight: float = 0.1):
+        """
+        Initialize VGAE model.
+        
+        Args:
+            input_dim: Input feature dimension (number of clients/benign models)
+            hidden_dim: Hidden layer dimension (default: 64)
+            latent_dim: Latent space dimension (default: 32)
+            dropout: Dropout rate (default: 0.2)
+            kl_weight: Weight for KL divergence term in loss function (default: 0.1)
+                       Lower values prevent posterior collapse, higher values enforce
+                       stronger regularization toward standard normal distribution.
+        """
         super().__init__()
         
         self.input_dim = input_dim
+        self.kl_weight = kl_weight
         
         # --- Encoder Layers ---
         self.gc1 = GraphConvolutionLayer(input_dim, hidden_dim)
@@ -279,9 +430,12 @@ class VGAE(nn.Module):
     def decode(self, z: torch.Tensor) -> torch.Tensor:
         """
         Inner product decoder: reconstructs the adjacency matrix.
-        A_pred = sigmoid(Z * Z^T)
+        Returns logits (before sigmoid) for use with binary_cross_entropy_with_logits.
+        A_pred = Z * Z^T (logits)
+        
+        Note: Apply sigmoid if probabilities are needed (e.g., for GSP module).
         """
-        adj_reconstructed = torch.sigmoid(torch.mm(z, z.t()))
+        adj_reconstructed = torch.mm(z, z.t())  # Return logits, not probabilities
         return adj_reconstructed
 
     def forward(self, x: torch.Tensor, adj: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
@@ -314,6 +468,23 @@ class VGAE(nn.Module):
                      mu: torch.Tensor, logvar: torch.Tensor) -> torch.Tensor:
         """
         Calculates VGAE loss: Reconstruction Loss (Weighted BCE) + KL Divergence.
+        
+        Standard VGAE loss formulation:
+            L = L_recon + β * KL(q(z|X,A) || p(z))
+        
+        where:
+            - L_recon: Weighted binary cross-entropy for adjacency matrix reconstruction
+            - KL: KL divergence from approximate posterior q(z|X,A) to prior p(z) = N(0,1)
+            - β: Weighting factor (self.kl_weight) to balance reconstruction and regularization
+        
+        Args:
+            adj_reconstructed: Reconstructed adjacency matrix from decoder
+            adj_orig: Original adjacency matrix
+            mu: Mean of latent distribution (from encoder), shape: (n_nodes, latent_dim)
+            logvar: Log variance of latent distribution (from encoder), shape: (n_nodes, latent_dim)
+        
+        Returns:
+            Total VGAE loss (scalar tensor)
         """
         n_nodes = adj_orig.size(0)
         
@@ -331,6 +502,7 @@ class VGAE(nn.Module):
         norm = (n_nodes * n_nodes) / (num_non_edges * 2) if num_non_edges > 0 else 1.0
 
         # 1. Reconstruction Loss (Weighted Binary Cross Entropy)
+        # Formula: -[y*log(σ(x)) + (1-y)*log(1-σ(x))] with pos_weight for class imbalance
         bce_loss = norm * F.binary_cross_entropy_with_logits(
             adj_reconstructed, 
             adj_orig, 
@@ -338,10 +510,12 @@ class VGAE(nn.Module):
         )
 
         # 2. KL Divergence (Regularization term)
-        # KL(N(mu, sigma) || N(0, 1))
-        kl_loss = -0.5 / n_nodes * torch.mean(
-            torch.sum(1 + logvar - mu.pow(2) - logvar.exp(), dim=1)
-        )
+        # Standard formula: KL(N(μ, σ²) || N(0, 1)) = -0.5 * Σ[1 + log(σ²) - μ² - σ²]
+        # where logvar = log(σ²), so σ² = exp(logvar)
+        # Per node: sum over latent dimensions, then average over all nodes
+        kl_per_node = -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp(), dim=1)
+        kl_loss = torch.mean(kl_per_node)  # Average over all nodes (standard VGAE implementation)
 
-        # Combine losses (KL term is often weighted less to prevent posterior collapse)
-        return bce_loss + 0.1 * kl_loss
+        # Combine losses: L = L_recon + β * KL
+        # β (kl_weight) balances reconstruction quality vs. regularization strength
+        return bce_loss + self.kl_weight * kl_loss

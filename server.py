@@ -1,5 +1,5 @@
 # server.py
-# This module implements the Server class for federated learning, including model aggregation and defense mechanisms against GRMP attacks.
+# This module implements the Server class for federated learning, including model aggregation.
 
 import torch
 import torch.nn as nn
@@ -11,43 +11,48 @@ import torch.nn.functional as F
 
 
 class Server:
-    """Server class for federated learning with GRMP attack defense"""
+    """Server class for federated learning with model aggregation"""
     def __init__(self, global_model: nn.Module, test_loader,
-                defense_threshold=0.4, total_rounds=20, server_lr=0.8, tolerance_factor=2,
-                d_T=0.5, gamma=10.0, similarity_alpha=0.7,
-                defense_high_rejection_threshold=0.4, defense_threshold_decay=0.9):
+                total_rounds=20, server_lr=0.8,
+                dist_bound=0.5,
+                similarity_mode='local_vs_global'):
         self.global_model = copy.deepcopy(global_model)
         self.test_loader = test_loader
-        self.defense_threshold = defense_threshold
         self.total_rounds = total_rounds
-        self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        # CRITICAL: Use explicit cuda:0 instead of 'cuda' to ensure device consistency
+        # This prevents issues where 'cuda' and 'cuda:0' are treated as different devices
+        if torch.cuda.is_available():
+            self.device = torch.device('cuda:0')
+        else:
+            self.device = torch.device('cpu')
         self.global_model.to(self.device)
         self.clients = []
+        self.client_dict = {}  # client_id -> client mapping for O(1) lookup
         self.log_data = []
 
-        # Additional stability parameters
-        self.server_lr = server_lr  # Server learning rate (inertia)
-        self.tolerance_factor = tolerance_factor  # Defense tolerance level
+        # Server parameters
+        self.server_lr = server_lr  # Server learning rate
+        # Similarity mode: 'local_vs_global' | 'pairwise' | 'both'
+        self.similarity_mode = str(similarity_mode).lower() if similarity_mode else 'local_vs_global'
+        if self.similarity_mode not in ('local_vs_global', 'pairwise', 'both'):
+            self.similarity_mode = 'local_vs_global'
         
         # Formula 4 constraint parameters (passed to attackers)
-        self.d_T = d_T  # Distance threshold for constraint (4b)
-        self.gamma = gamma  # Upper bound for constraint (4c)
-        self.similarity_alpha = similarity_alpha  # Weight for pairwise similarities
-        
-        # Adaptive defense parameters
-        self.defense_high_rejection_threshold = defense_high_rejection_threshold  # High rejection rate threshold
-        self.defense_threshold_decay = defense_threshold_decay  # Threshold decay factor
+        self.dist_bound = dist_bound  # Distance threshold for constraint (4b)
+        self.sim_bound_low = None  # Manual lower bound for cosine similarity (None = use benign min)
+        self.sim_bound_up = None   # Manual upper bound for cosine similarity (None = use benign mean)
 
-        # Track historical data for adaptive adjustments
+        # Track historical data
         self.history = {
             'clean_acc': [],  # Clean accuracy
-            'rejection_rates': [],  # Client rejection rates
             'local_accuracies': {}  # Local accuracies per client per round {client_id: [acc1, acc2, ...]}
         }
 
     def register_client(self, client):
         """Register a client to the server."""
         self.clients.append(client)
+        # Update client_id -> client mapping for O(1) lookup
+        self.client_dict[client.client_id] = client
 
     def broadcast_model(self):
         """Broadcast the global model to all clients."""
@@ -63,47 +68,77 @@ class Server:
             else:
                 client.optimizer = None
 
-    def _compute_similarities(self, updates: List[torch.Tensor]) -> np.ndarray:
-        """Compute mixed similarities - combining pairwise similarities and similarities with the mean."""
+    def _compute_weighted_average(self, updates: List[torch.Tensor], client_ids: List[int] = None) -> Tuple[torch.Tensor, List[float]]:
+        """
+        Compute weighted average update (FedAvg style) shared by similarity and distance calculations.
+        
+        Args:
+            updates: List of client update tensors
+            client_ids: List of client IDs (optional, for weighted aggregation)
+            
+        Returns:
+            weighted_avg: Weighted average update tensor
+            weights: List of weights used for each client
+        """
+        if client_ids is not None and len(client_ids) == len(updates):
+            weights = []
+            # Use dictionary lookup for O(1) access instead of linear search
+            client_dict = getattr(self, 'client_dict', {c.client_id: c for c in self.clients})
+            for cid in client_ids:
+                client = client_dict.get(cid)
+                if client:
+                    if getattr(client, 'is_attacker', False):
+                        D_i = float(getattr(client, 'claimed_data_size', 1.0))
+                    else:
+                        D_i = float(len(getattr(client, 'data_indices', [])) or 1.0)
+                else:
+                    D_i = 1.0
+                weights.append(D_i)
+            
+            total_D = sum(weights) + 1e-12
+            weighted_avg = torch.zeros_like(updates[0])
+            for update, w in zip(updates, weights):
+                weighted_avg += (w / total_D) * update
+        else:
+            weighted_avg = torch.stack(updates).mean(dim=0)
+            weights = [1.0 / len(updates)] * len(updates)
+        
+        return weighted_avg, weights
+
+    def _compute_similarities(self, updates: List[torch.Tensor], client_ids: List[int] = None) -> np.ndarray:
+        """
+        Compute cosine similarities between each update and the weighted average update.
+        
+        CRITICAL: Uses weighted aggregation (FedAvg style) to match the weighted-update distance definition used in camouflage optimization.
+        
+        Definition (consistent with weighted FedAvg reference update):
+            sim_i = cosine_similarity(Δ_i, Δ_g)
+            where Δ_g = Σ_j (D_j / D_total) * Δ_j (weighted average, FedAvg style)
+        
+        This matches the distance definition used in _compute_distance_update_space:
+            dist = ||Δ_att - Δ_g|| where Δ_g is weighted aggregate
+        
+        Args:
+            updates: List of client update tensors
+            client_ids: List of client IDs (optional, for weighted aggregation)
+            
+        Returns:
+            numpy array of cosine similarities (one per client)
+        """
         n_updates = len(updates)
 
-        print("  📊 Using mixed similarity computation")
+        print("  📊 Computing cosine similarities (weighted aggregation, matches camouflage optimization)")
 
-        # Step 1: Compute pairwise similarities
-        pairwise_sims = []
-        for i in range(n_updates):
-            other_sims = []
-            for j in range(n_updates):
-                if i != j:
-                    sim = torch.cosine_similarity(
-                        updates[i].unsqueeze(0),
-                        updates[j].unsqueeze(0)
-                    ).item()
-                    other_sims.append(sim)
-            # Use average instead of median (more lenient)
-            avg_sim = np.mean(other_sims) if other_sims else 0
-            pairwise_sims.append(avg_sim)
-
-        # Step 2: Compute similarities with the mean update
-        avg_update = torch.stack(updates).mean(dim=0)
-        avg_sims = []
-        for update in updates:
-            sim = torch.cosine_similarity(
-                update.unsqueeze(0),
-                avg_update.unsqueeze(0)
-            ).item()
-            avg_sims.append(sim)
-
-        # Step 3: Combine both similarities (weighted average)
-        similarities = []
-        for i in range(n_updates):
-            mixed_sim = self.similarity_alpha * pairwise_sims[i] + (1 - self.similarity_alpha) * avg_sims[i]
-            similarities.append(mixed_sim)
-
-        similarities = np.array(similarities)
+        # Compute weighted average (shared with distance calculation)
+        weighted_avg, _ = self._compute_weighted_average(updates, client_ids)
+        
+        # Compute cosine similarity for all updates at once (batch computation)
+        updates_stack = torch.stack(updates)  # (N, D)
+        weighted_avg_expanded = weighted_avg.unsqueeze(0).expand_as(updates_stack)  # (N, D)
+        similarities = torch.cosine_similarity(updates_stack, weighted_avg_expanded, dim=1).cpu().numpy()
 
         # Print information
-        print(f"  📈 Mixed Similarity - Mean: {similarities.mean():.3f}, "
+        print(f"  📈 Cosine Similarity - Mean: {similarities.mean():.3f}, "
               f"Std Dev: {similarities.std():.3f}")
 
         # Display similarity for each client
@@ -123,96 +158,163 @@ class Server:
 
         return similarities
 
+    def _compute_euclidean_distances(self, updates: List[torch.Tensor], client_ids: List[int] = None) -> np.ndarray:
+        """
+        Compute Euclidean distances between each update and the weighted average update.
+        
+        CRITICAL: Uses weighted aggregation (FedAvg style) to match the weighted-update distance definition used in camouflage optimization.
+        
+        Definition (consistent with weighted FedAvg reference update):
+            dist_i = ||Δ_i - Δ_g||
+            where Δ_g = Σ_j (D_j / D_total) * Δ_j (weighted average, FedAvg style)
+        
+        This matches the distance definition used in _compute_distance_update_space:
+            dist = ||Δ_att - Δ_g|| where Δ_g is weighted aggregate
+        
+        Args:
+            updates: List of client update tensors
+            client_ids: List of client IDs (optional, for weighted aggregation)
+            
+        Returns:
+            numpy array of Euclidean distances (one per client)
+        """
+        n_updates = len(updates)
+        
+        print("  📊 Computing Euclidean distances (weighted aggregation, matches camouflage optimization)")
+        
+        # Compute weighted average (shared with similarity calculation)
+        weighted_avg, _ = self._compute_weighted_average(updates, client_ids)
+        
+        # Compute Euclidean distance for all updates at once (batch computation)
+        updates_stack = torch.stack(updates)  # (N, D)
+        weighted_avg_expanded = weighted_avg.unsqueeze(0).expand_as(updates_stack)  # (N, D)
+        diff = updates_stack - weighted_avg_expanded  # (N, D)
+        distances = torch.norm(diff, dim=1).cpu().numpy()
+        
+        # Print information
+        print(f"  📈 Euclidean Distance - Mean: {distances.mean():.6f}, "
+              f"Std Dev: {distances.std():.6f}")
+        
+        # Display distance for each client
+        attacker_ids = {client.client_id for client in self.clients if getattr(client, 'is_attacker', False)}
+        for i, dist in enumerate(distances):
+            if hasattr(self, '_sorted_client_ids') and i < len(self._sorted_client_ids):
+                client_id = self._sorted_client_ids[i]
+                client = next((c for c in self.clients if c.client_id == client_id), None)
+                if client:
+                    client_type = "Attacker" if getattr(client, 'is_attacker', False) else "Benign"
+                    print(f"    Client {client_id} ({client_type}): {dist:.6f}")
+                else:
+                    print(f"    Client {client_id}: {dist:.6f}")
+            else:
+                print(f"    Update {i}: {dist:.6f}")
+        
+        return distances
+
+    def _compute_similarities_pairwise(self, updates: List[torch.Tensor], client_ids: List[int] = None) -> Tuple[np.ndarray, np.ndarray]:
+        """
+        Compute pairwise cosine similarities between all client updates (no self, no global).
+        S[i,j] = cosine_similarity(Δ_i, Δ_j). Per-client metric: mean similarity to other clients (exclude self).
+        
+        Returns:
+            similarity_matrix: (N, N) numpy array
+            similarities_derived: (N,) per-client mean similarity to others (same order as client_ids)
+        """
+        n = len(updates)
+        print("  📊 Computing cosine similarities (pairwise: local vs local, no self)")
+        if n == 0:
+            return np.array([]).reshape(0, 0), np.array([])
+        updates_stack = torch.stack(updates)  # (N, D)
+        normalized = F.normalize(updates_stack.float(), p=2, dim=1)  # (N, D)
+        similarity_matrix = (normalized @ normalized.T).cpu().numpy()  # (N, N), diagonal = 1
+        # Per-client: mean over j != i (exclude self)
+        similarities_derived = np.zeros(n)
+        if n == 1:
+            similarities_derived[0] = 1.0
+        else:
+            for i in range(n):
+                others = np.concatenate([similarity_matrix[i, :i], similarity_matrix[i, i+1:]])
+                similarities_derived[i] = float(np.mean(others))
+        print(f"  📈 Cosine Similarity (pairwise mean) - Mean: {similarities_derived.mean():.3f}, Std Dev: {similarities_derived.std():.3f}")
+        attacker_ids = {client.client_id for client in self.clients if getattr(client, 'is_attacker', False)}
+        for i, sim in enumerate(similarities_derived):
+            if hasattr(self, '_sorted_client_ids') and i < len(self._sorted_client_ids):
+                client_id = self._sorted_client_ids[i]
+                client = next((c for c in self.clients if c.client_id == client_id), None)
+                if client:
+                    client_type = "Attacker" if getattr(client, 'is_attacker', False) else "Benign"
+                    print(f"    Client {client_id} ({client_type}): {sim:.3f}")
+                else:
+                    print(f"    Client {client_id}: {sim:.3f}")
+            else:
+                print(f"    Update {i}: {sim:.3f}")
+        return similarity_matrix, similarities_derived
+
     def aggregate_updates(self, updates: List[torch.Tensor],
                           client_ids: List[int]) -> Dict:
         # Store client_ids for similarity display
         self._current_client_ids = client_ids
         self._sorted_client_ids = client_ids
-        """
-        Aggregate updates - Enhanced stability version.
-        Uses a more lenient defense mechanism and smooth update strategy.
-        """
-        similarities = self._compute_similarities(updates)
-
-        # Compute dynamic threshold (more lenient)
-        mean_sim = similarities.mean()
-        std_sim = similarities.std()
-
-        # Apply tolerance_factor to make the threshold more lenient
-        dynamic_threshold = max(self.defense_threshold,
-                                mean_sim - self.tolerance_factor * std_sim)
-
-        # Adaptive adjustment: If rejection rates are too high, further lower the threshold
-        if len(self.history['rejection_rates']) > 0:
-            recent_rejection_rate = np.mean(self.history['rejection_rates'][-3:])
-            if recent_rejection_rate > self.defense_high_rejection_threshold:
-                dynamic_threshold *= self.defense_threshold_decay
-                print(f"  ⚠️ High rejection rate detected. Lowering threshold to: {dynamic_threshold:.3f}")
-
-        accepted_indices = []
-        rejected_indices = []
-
-        for i, sim in enumerate(similarities):
-            if sim >= dynamic_threshold:
-                accepted_indices.append(i)
+        
+        # Standard FedAvg aggregation
+        weights = []
+        for cid in client_ids:
+            client = self.clients[cid]
+            if getattr(client, 'is_attacker', False):
+                w = getattr(client, 'claimed_data_size', 1.0)
             else:
-                rejected_indices.append(i)
-
-        # Record rejection rate
-        rejection_rate = len(rejected_indices) / len(updates)
-        self.history['rejection_rates'].append(rejection_rate)
-
-        # Aggregate updates from accepted clients
-        aggregated_update_norm = 0.0
-        if accepted_indices:
-            accepted_updates = [updates[i] for i in accepted_indices]
-            # Weighted aggregation by claimed data sizes (paper: D_i/D(t)).
-            # For benign clients, try to use their data_indices length if available.
-            weights = []
-            for i in accepted_indices:
-                cid = client_ids[i]
-                client = self.clients[cid]
-                if getattr(client, 'is_attacker', False):
-                    w = getattr(client, 'claimed_data_size', 1.0)
-                else:
-                    w = len(getattr(client, 'data_indices', [])) or 1.0
-                weights.append(w)
-            # Updates are on CPU, but aggregation can be done on CPU and then moved
-            # Move to GPU for computation if needed, or keep on CPU
-            dtype = accepted_updates[0].dtype
-            # Stack on CPU (updates are on CPU), then move to GPU for weighted sum
-            stacked = torch.stack(accepted_updates).to(self.device)  # Move to GPU for aggregation
-            weight_tensor = torch.tensor(weights, device=self.device, dtype=dtype)
-            weight_tensor = weight_tensor / weight_tensor.sum()
-            aggregated_update = (stacked * weight_tensor.view(-1, 1)).sum(dim=0)
-            aggregated_update_norm = torch.norm(aggregated_update).item()
-            # Clean up stacked tensor immediately
-            del stacked
-
-            # Smooth the global model update using server learning rate (key improvement)
-            current_params = self.global_model.get_flat_params()
-            new_params = current_params + self.server_lr * aggregated_update
-            self.global_model.set_flat_params(new_params)
-
-            print(f"  📊 Update Stats: Accepted {len(accepted_indices)}/{len(updates)} updates")
-            print(f"  🔧 Server Learning Rate: {self.server_lr} (Smooth updates)")
-            print(f"  📐 Aggregated update norm: {aggregated_update_norm:.6f}")
-        else:
-            print("  ⚠️ Warning: No updates were accepted this round!")
-
-        defense_log = {
+                w = len(getattr(client, 'data_indices', [])) or 1.0
+            weights.append(w)
+        
+        # Weighted aggregation (standard FedAvg)
+        dtype = updates[0].dtype
+        stacked = torch.stack(updates).to(self.device)
+        weight_tensor = torch.tensor(weights, device=self.device, dtype=dtype)
+        weight_tensor = weight_tensor / weight_tensor.sum()
+        aggregated_update = (stacked * weight_tensor.view(-1, 1)).sum(dim=0)
+        aggregated_update_norm = torch.norm(aggregated_update).item()
+        del stacked
+        
+        # Update global model (standard FedAvg: w_t+1 = w_t + η * aggregated_update)
+        current_params = self.global_model.get_flat_params()
+        new_params = current_params + self.server_lr * aggregated_update
+        self.global_model.set_flat_params(new_params)
+        
+        print(f"  📊 Standard FedAvg: Aggregated {len(updates)}/{len(updates)} updates")
+        print(f"  🔧 Server Learning Rate: {self.server_lr}")
+        print(f"  📐 Aggregated update norm: {aggregated_update_norm:.6f}")
+        
+        # Compute similarity and distance metrics for visualization
+        mode = getattr(self, 'similarity_mode', 'local_vs_global')
+        if mode == 'local_vs_global':
+            similarities = self._compute_similarities(updates, client_ids)
+            similarity_matrix = None
+            similarities_vs_global = None
+        elif mode == 'pairwise':
+            similarity_matrix, similarities = self._compute_similarities_pairwise(updates, client_ids)
+            similarities_vs_global = None
+        else:  # 'both'
+            similarities_vs_global = self._compute_similarities(updates, client_ids)
+            similarity_matrix, similarities = self._compute_similarities_pairwise(updates, client_ids)
+        euclidean_distances = self._compute_euclidean_distances(updates, client_ids) if len(updates) > 0 else np.array([])
+        
+        aggregation_log = {
             'similarities': similarities.tolist(),
-            'accepted_clients': [client_ids[i] for i in accepted_indices],
-            'rejected_clients': [client_ids[i] for i in rejected_indices],
-            'threshold': dynamic_threshold,
-            'mean_similarity': mean_sim,
-            'std_similarity': std_sim,
-            'tolerance_factor': self.tolerance_factor,
-            'rejection_rate': rejection_rate,
+            'euclidean_distances': euclidean_distances.tolist() if len(euclidean_distances) > 0 else [],
+            'accepted_clients': client_ids.copy(),
+            'mean_similarity': float(similarities.mean()) if len(similarities) > 0 else 1.0,
+            'std_similarity': float(similarities.std()) if len(similarities) > 0 else 0.0,
+            'mean_euclidean_distance': euclidean_distances.mean().item() if len(euclidean_distances) > 0 else 0.0,
+            'std_euclidean_distance': euclidean_distances.std().item() if len(euclidean_distances) > 0 else 0.0,
             'aggregated_update_norm': aggregated_update_norm
         }
+        if similarity_matrix is not None:
+            aggregation_log['similarity_matrix'] = similarity_matrix.tolist()
+        if similarities_vs_global is not None:
+            aggregation_log['similarities_vs_global'] = similarities_vs_global.tolist()
+        aggregation_log['similarity_mode'] = mode
 
-        return defense_log
+        return aggregation_log
 
     def evaluate_local_accuracy(self, client) -> float:
         """
@@ -236,15 +338,15 @@ class Server:
                 # Use global test loader for fair comparison (same test set for all clients)
                 for batch in self.test_loader:
                     input_ids = batch['input_ids'].to(self.device)
-                    attention_mask = batch['attention_mask'].to(self.device)
-                    labels = batch['labels'].to(self.device)
-                    
-                    outputs = client.model(input_ids, attention_mask)
-                    predictions = torch.argmax(outputs, dim=1)
-                    
-                    correct += (predictions == labels).sum().item()
-                    total += labels.size(0)
-            
+                attention_mask = batch['attention_mask'].to(self.device)
+                labels = batch['labels'].to(self.device)
+                
+                outputs = client.model(input_ids, attention_mask)
+                predictions = torch.argmax(outputs, dim=1)
+                
+                correct += (predictions == labels).sum().item()
+                total += labels.size(0)
+        
             accuracy = correct / total if total > 0 else 0.0
         finally:
             # Move model back to CPU to free GPU memory
@@ -261,11 +363,22 @@ class Server:
         Returns:
             Clean accuracy (float) on the test set
         """
+        accuracy, _ = self.evaluate_with_loss()
+        return accuracy
+    
+    def evaluate_with_loss(self) -> Tuple[float, float]:
+        """
+        Evaluate the global model's performance and loss in a single pass.
+        
+        Returns:
+            Tuple of (clean_accuracy, global_loss) on the test set
+        """
         self.global_model.eval()
 
-        # Evaluate clean accuracy
+        # Evaluate clean accuracy and loss in one pass
         correct = 0
         total = 0
+        total_loss = 0.0
 
         with torch.no_grad():
             for batch in self.test_loader:
@@ -274,17 +387,34 @@ class Server:
                 labels = batch['labels'].to(self.device)
 
                 outputs = self.global_model(input_ids, attention_mask)
+                
+                # Compute accuracy
                 predictions = torch.argmax(outputs, dim=1)
-
                 correct += (predictions == labels).sum().item()
                 total += labels.size(0)
+                
+                # Compute loss
+                loss = F.cross_entropy(outputs, labels, reduction='sum')
+                total_loss += loss.item()
 
         clean_accuracy = correct / total if total > 0 else 0
+        avg_loss = total_loss / total if total > 0 else 0.0
 
         # Record historical metrics
         self.history['clean_acc'].append(clean_accuracy)
 
-        return clean_accuracy
+        return clean_accuracy, avg_loss
+    
+    def evaluate_global_loss(self) -> float:
+        """
+        Evaluate the global model's loss on the test set.
+        For efficiency, use evaluate_with_loss() if you also need accuracy.
+        
+        Returns:
+            Global loss (float) on the test set (cross-entropy loss)
+        """
+        _, loss = self.evaluate_with_loss()
+        return loss
 
     def adaptive_adjustment(self, round_num: int):
         """Adaptively adjust parameters based on historical performance."""
@@ -299,8 +429,8 @@ class Server:
         # Adaptive adjustment
         self.adaptive_adjustment(round_num)
 
-        # Display current parameters (no hard-coded stage logic)
-        print(f"Current Parameters: server_lr={self.server_lr:.2f}, tolerance={self.tolerance_factor:.1f}")
+        # Display current parameters
+        print(f"Current Parameters: server_lr={self.server_lr:.2f}")
         print(f"{'=' * 60}")
 
         # Broadcast the model
@@ -309,19 +439,42 @@ class Server:
         
         # Set global model params and constraint parameters for attackers (Formula 4)
         global_params = self.global_model.get_flat_params()  # Already on GPU (server model is on GPU)
+        
+        # Calculate total data size D(t) and benign client data sizes for Formula (2) and (3)
+        total_data_size = 0.0
+        benign_data_sizes = {}
         for client in self.clients:
-            if isinstance(client, AttackerClient):
+            if getattr(client, 'is_attacker', False):
+                total_data_size += getattr(client, 'claimed_data_size', 1.0)
+            else:
+                client_data_size = len(getattr(client, 'data_indices', [])) or 1.0
+                benign_data_sizes[client.client_id] = client_data_size
+                total_data_size += client_data_size
+        
+        for client in self.clients:
+            # Use is_attacker attribute instead of isinstance to support both AugMP and ALIE clients
+            if getattr(client, 'is_attacker', False):
+                # Set global model params and constraint params (for AugMP and compatible clients)
+                # ALIE attackers also implement these methods for interface compatibility
                 client.set_global_model_params(global_params)
-                # Set constraint parameters: d_T and gamma
+                # Set constraint parameters: d_T, total_data_size, and benign_data_sizes
                 # d_T: distance threshold for proximity constraint (4b)
-                # gamma: upper bound for aggregation distance constraint (4c)
-                client.set_constraint_params(d_T=self.d_T, gamma=self.gamma)
+                # total_data_size: D(t) for Formula (2) and (3)
+                # benign_data_sizes: {client_id: D_i(t)} for Formula (2) and (3)
+                client.set_constraint_params(
+                    dist_bound=self.dist_bound,
+                    sim_bound_low=getattr(self, 'sim_bound_low', None),
+                    sim_bound_up=getattr(self, 'sim_bound_up', None),
+                    total_data_size=total_data_size,
+                    benign_data_sizes=benign_data_sizes
+                )
 
         # Phase 1: Preparation
         print("\n🔧 Phase 1: Client Preparation")
         for client in self.clients:
             client.set_round(round_num)
-            if isinstance(client, AttackerClient):
+            # Use is_attacker attribute instead of isinstance to support both AugMP and ALIE clients
+            if getattr(client, 'is_attacker', False):
                 client.prepare_for_round(round_num)
 
         # Phase 2: Local Training
@@ -335,33 +488,57 @@ class Server:
         # Phase 3: Attacker Camouflage
         print("\n🎭 Phase 3: Attacker Camouflage")
         benign_updates = []
+        benign_client_ids = []
         for client_id, update in initial_updates.items():
             client = self.clients[client_id]
             if not getattr(client, 'is_attacker', False):
                 benign_updates.append(update)
+                benign_client_ids.append(client_id)
         
         print(f"  Captured {len(benign_updates)} benign updates for camouflage.")
+        
+        # ===== NEW: Store completed attacker updates for coordinated optimization =====
+        completed_attacker_updates = {}  # {client_id: update_tensor}
+        completed_attacker_client_ids = []  # Keep order
+        completed_attacker_data_sizes = {}  # {client_id: claimed_data_size}
+        # ==============================================================================
         
         final_updates = {}
         for client_id, update in initial_updates.items():
             client = self.clients[client_id]
             if getattr(client, 'is_attacker', False):
                 print(f"  ⚠️ Triggering camouflage logic for Client {client_id}")
-                client.receive_benign_updates(benign_updates)
+                client.receive_benign_updates(benign_updates, client_ids=benign_client_ids)
+                
+                # ===== NEW: Pass completed attacker updates to current attacker =====
+                if completed_attacker_updates:
+                    client.receive_attacker_updates(
+                        updates=list(completed_attacker_updates.values()),
+                        client_ids=completed_attacker_client_ids,
+                        data_sizes=completed_attacker_data_sizes
+                    )
+                # ====================================================================
+                
                 final_updates[client_id] = client.camouflage_update(update)
+                
+                # ===== NEW: Store current attacker's update for subsequent attackers =====
+                completed_attacker_updates[client_id] = final_updates[client_id]
+                completed_attacker_client_ids.append(client_id)
+                completed_attacker_data_sizes[client_id] = float(getattr(client, 'claimed_data_size', 1.0))
+                # =========================================================================
             else:
                 final_updates[client_id] = update
 
-        # Phase 4: Defense and Aggregation
-        print("\n🛡️ Phase 4: Defense and Aggregation")
+        # Phase 4: Aggregation
+        print("\n📊 Phase 4: Model Aggregation")
         # Ensure deterministic order of keys
         sorted_client_ids = sorted(final_updates.keys())
         final_update_list = [final_updates[cid] for cid in sorted_client_ids]
         
-        defense_log = self.aggregate_updates(final_update_list, sorted_client_ids)
+        aggregation_log = self.aggregate_updates(final_update_list, sorted_client_ids)
 
-        # Evaluate the global model
-        clean_acc = self.evaluate()
+        # Evaluate the global model (compute accuracy and loss together for efficiency)
+        clean_acc, global_loss = self.evaluate_with_loss()
         
         # Evaluate local accuracies for each client
         local_accs_this_round = {}
@@ -378,20 +555,16 @@ class Server:
                 # Skip if evaluation fails (e.g., empty data loader)
                 print(f"  ⚠️  Could not evaluate local accuracy for client {client.client_id}: {e}")
 
-        # Defense analysis
-        print(f"\n📈 Defense Analysis:")
-        print(f"  Dynamic Threshold: {defense_log['threshold']:.4f}")
-        print(f"  Rejection Rate: {defense_log['rejection_rate']:.1%}")
-
         # Create log for the current round
         round_log = {
             'round': round_num + 1,
             'clean_accuracy': clean_acc,
+            'global_loss': global_loss,  # Add global loss to log for visualization
             'acc_diff': (abs(clean_acc - self.history['clean_acc'][-2])
                          if len(self.history['clean_acc']) > 1 else 0.0),
-            'defense': defense_log,
+            'aggregation': aggregation_log,
             'server_lr': self.server_lr,
-            'local_accuracies': local_accs_this_round  # Add local accuracies
+            'local_accuracies': local_accs_this_round
         }
 
         self.log_data.append(round_log)
@@ -407,5 +580,8 @@ class Server:
             delta_best = clean_acc - best_clean
             print(f"  ΔClean vs prev: {delta_prev:+.4f}")
             print(f"  ΔClean vs best: {delta_best:+.4f}")
+        
+        # Display global loss (already computed together with accuracy)
+        print(f"  Global Loss: {global_loss:.4f}")
 
         return round_log
